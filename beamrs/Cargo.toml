@@ -54,8 +54,6 @@ hydrate = [
     "dep:wasm-bindgen-futures",
     "dep:web-sys",
     "leptos/hydrate",
-    "leptos_meta/hydrate",
-    "leptos_router/hydrate",
 ]
 ssr = [
     "dep:anyhow",
@@ -84,6 +82,11 @@ panic = "abort"
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"
+
+# leptos_router 0.6 requires lru ^0.11; use the upstream Stacked Borrows fix
+# from jeromefroe/lru-rs commit 62be24c while retaining that compatible version.
+[patch.crates-io]
+lru = { path = "vendor/lru" }
 
 [package.metadata.leptos]
 output-name = "beamrs"

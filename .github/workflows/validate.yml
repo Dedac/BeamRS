@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -17,4 +20,3 @@ jobs:
           cp -R templates/qrspi/. "$run_dir/"
           mkdir -p "$run_dir/research" "$run_dir/tasks"
           scripts/validate-qrspi.sh "$run_dir"
-
