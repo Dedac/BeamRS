@@ -209,11 +209,11 @@ fn Sidebar() -> impl IntoView {
                 }}
             </nav>
             <form
+                id="frequency-creation-form"
                 class=move || {
                     if frequency_creation.expanded.get() { "compact-form visible" } else { "compact-form" }
                 }
                 on:submit=submit
-                attr:aria-expanded=move || frequency_creation.expanded.get().to_string()
             >
                 <label for="frequency-name">"New frequency"</label>
                 <div class="input-row">
@@ -269,7 +269,12 @@ fn HomePage() -> impl IntoView {
             <h1>"Welcome to " <span>"BeamRS"</span></h1>
             <p>"Pick a frequency, send a ray, and prism the signals that deserve a wider spectrum."</p>
             <div class="welcome-actions">
-                <button type="button" class="primary-button" on:click=on_create_frequency>
+                <button
+                    type="button"
+                    class="primary-button"
+                    aria-controls="frequency-creation-form"
+                    on:click=on_create_frequency
+                >
                     "Create a frequency"
                 </button>
                 <A class="text-link" href="/settings">"Tune your identity →"</A>
