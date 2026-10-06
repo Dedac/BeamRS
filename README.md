@@ -1,88 +1,141 @@
-# QRSPI Methodology
+# BeamRS
 
-A portable, repository-first workflow for reliable AI-assisted software delivery.
+BeamRS is a Rust reimplementation of [Dedac/Beam](https://github.com/Dedac/Beam),
+preserving its anonymous, frequency-based social experience with a new
+Leptos + Axum + PostgreSQL architecture.
 
-QRSPI+ turns an ambiguous request into a sequence of small, reviewable artifacts:
+Users receive a browser-local `Anon<N>` identity, can retune that display name,
+create and browse frequencies, transmit short rays, prism/unprism rays, and
+view authored or prismed rays on user profiles. The settings page includes an
+animated canvas beam and visible pass counter.
 
-```text
-Goals -> Questions -> Research -> Design -> Phasing -> Structure -> Plan
-      -> Parallelize -> Implement -> Integrate -> Test -> Replan
-```
-
-Each phase has a narrow purpose, writes its output to `docs/qrspi/<run>/`, and
-requires explicit approval before downstream work begins. The workflow is
-designed for Claude Code, Copilot CLI, Codex, and other agents that can read
-and write repository files.
-
-## Use it in a project
-
-1. Copy `templates/qrspi/` and `scripts/validate-qrspi.sh` into the target
-   repository.
-2. Create a run directory:
-
-   ```sh
-   mkdir -p docs/qrspi/2026-10-06-example
-   cp templates/qrspi/config.md \
-      docs/qrspi/2026-10-06-example/config.md
-   ```
-
-3. Start with `goals.md`, then advance only after the current artifact is
-   approved.
-4. Validate the run at every gate:
-
-   ```sh
-   ./scripts/validate-qrspi.sh docs/qrspi/2026-10-06-example
-   ```
-
-## Repository layout
+## Architecture
 
 ```text
-docs/qrspi/<run>/
-├── config.md
-├── goals.md
-├── questions.md
-├── research/
-│   ├── q01.md
-│   └── summary.md
-├── design.md
-├── phasing.md
-├── roadmap.md
-├── structure.md
-├── plan.md
-├── tasks/
-├── parallelization.md
-└── reviews/
+Browser
+  ├── hydrated Leptos router and reactive components compiled to WASM
+  ├── Rust client module for local identity and REST calls
+  ├── web_sys Canvas animation
+  └── accessible responsive CSS
+          │
+          ▼
+Axum router / REST API
+          │
+          ▼
+BeamStore boundary
+          │
+          ▼
+SQLx PostgreSQL repository
 ```
 
-The templates are intentionally tool-neutral. They define the handoff contract;
-an agent harness or human can perform each phase.
+The server and browser render the same Leptos component tree. `cargo-leptos`
+builds the Axum SSR binary and the hydration library as a `wasm32` bundle;
+there is no handwritten application JavaScript. Rust reactive signals own
+navigation, forms, loading/error/empty states, identity, and prism controls.
+The browser-only layer uses `gloo-net` for the existing REST API and `web_sys`
+for local storage and Canvas. Axum owns SSR, generated assets, health checks,
+and the JSON API. SQLx runs embedded migrations at startup.
 
-## Operating rules
+## Prerequisites
 
-- Research questions are neutral and must not prescribe the solution.
-- Research records facts and evidence before recommendations.
-- Design and structure are reviewed before detailed planning.
-- Work is split into vertical slices with explicit validation.
-- Production code follows a failing-test-first loop where practical.
-- Parallel work requires a dependency and file-overlap analysis.
-- CI, integration review, and acceptance tests are separate gates.
-- Fixes return through the same implementation and review path.
-- Architectural changes loop back to the earliest affected artifact.
-- A quick-fix route is appropriate for small, localized changes.
+- Rust stable
+- `wasm32-unknown-unknown`
+- `cargo-leptos` 0.2.34
+- PostgreSQL 16+, or Docker with Docker Compose
 
-## Publishing
-
-This workspace contains the implementation scaffold and can be initialized as
-the future `Dedac/qrspi-methodology` repository:
+## Run locally
 
 ```sh
-git init
-git add .
-git commit -m "feat: add portable QRSPI methodology"
-git branch -M main
-git remote add origin https://github.com/Dedac/qrspi-methodology.git
-git push -u origin main
+cd beamrs
+cp .env.example .env
+docker compose up -d db
+rustup target add wasm32-unknown-unknown
+cargo install cargo-leptos --version 0.2.34 --locked
+cargo leptos watch
 ```
 
-Create the empty GitHub repository before running the final `git push`.
+Open <http://localhost:8080>. The application automatically applies migrations
+and installs demo frequencies, users, rays, and a prism on a new database.
 
+To use an existing PostgreSQL instance, set:
+
+```sh
+export DATABASE_URL=postgresql://beamrs:beamrs@localhost:5432/beamrs
+export HOST=127.0.0.1
+export PORT=8080
+cd beamrs
+cargo leptos watch
+```
+
+`DATABASE_URL` is required. `HOST` defaults to `0.0.0.0`, and `PORT` defaults
+to `8080`.
+
+## Docker workflow
+
+Run the complete application and database:
+
+```sh
+cd beamrs
+docker compose up --build
+```
+
+Stop containers while preserving the database:
+
+```sh
+docker compose down
+```
+
+Add `--volumes` only when you intentionally want to delete local database data.
+
+## API
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/frequencies` | List frequencies |
+| `POST` | `/api/frequencies` | Create a frequency |
+| `GET` | `/api/frequencies/:id/rays` | List rays on a frequency |
+| `POST` | `/api/users` | Get or create a user by username |
+| `PATCH` | `/api/users/:id` | Change a display name |
+| `GET` | `/api/users/:username/rays` | List authored rays |
+| `GET` | `/api/users/:username/prisms` | List prismed rays |
+| `POST` | `/api/rays` | Transmit a ray |
+| `POST` | `/api/prisms` | Prism a ray idempotently |
+| `DELETE` | `/api/prisms/:user_id/:ray_id` | Remove a prism idempotently |
+
+State changes never use `GET`. JSON errors use an `{"error":"..."}` body and
+an appropriate HTTP status.
+
+## Validation
+
+```sh
+./scripts/validate-qrspi.sh docs/qrspi/2026-10-06-beamrs-parity
+cd beamrs
+cargo fmt --all -- --check
+cargo clippy --all-targets --features ssr -- -D warnings
+cargo clippy --lib --no-default-features --features hydrate \
+  --target wasm32-unknown-unknown -- -D warnings
+cargo test --all-targets
+cargo leptos build --release
+```
+
+CI also starts the application against PostgreSQL and checks the health route.
+
+## Security model
+
+BeamRS intentionally preserves Beam's unauthenticated identity model. A
+username is a display identity, not proof of ownership, and anyone with API
+access can act as any known user ID. Do not deploy this version where identity,
+authorization, privacy, or abuse resistance is required without adding an
+authentication and authorization layer.
+
+User-controlled text is validated, rendered as text, and escaped in generated
+markup. Database constraints reinforce application validation. This repository
+does not copy Beam's bundled assets or source verbatim.
+
+## QRSPI+
+
+The implementation followed the repository's QRSPI+ workflow. The approved
+run, research, design, tasks, phase gates, and verification records live in
+[`docs/qrspi/2026-10-06-beamrs-parity/`](docs/qrspi/2026-10-06-beamrs-parity/).
+
+BeamRS is inspired by Dedac/Beam and is an independent Rust implementation.

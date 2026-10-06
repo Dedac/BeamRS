@@ -1,0 +1,73 @@
+name: BeamRS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beamrs
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: beamrs
+          POSTGRES_USER: beamrs
+          POSTGRES_PASSWORD: beamrs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U beamrs -d beamrs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://beamrs:beamrs@localhost:5432/beamrs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: beamrs
+      - name: Install cargo-leptos
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-leptos@0.2.34
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy server
+        run: cargo clippy --all-targets --features ssr -- -D warnings
+      - name: Clippy browser
+        run: cargo clippy --lib --no-default-features --features hydrate --target wasm32-unknown-unknown -- -D warnings
+      - name: Test
+        run: cargo test --all-targets
+      - name: Build full stack
+        run: cargo leptos build --release
+      - name: Smoke test migrations and server
+        run: |
+          LEPTOS_SITE_ADDR=0.0.0.0:8080 LEPTOS_SITE_ROOT=target/site LEPTOS_ENV=PROD ./target/release/beamrs > /tmp/beamrs.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/health --output /dev/null; then
+              curl --fail --silent http://127.0.0.1:8080/ | grep --quiet '/pkg/beamrs.js'
+              curl --fail --silent http://127.0.0.1:8080/pkg/beamrs.js --output /tmp/beamrs.js
+              curl --fail --silent http://127.0.0.1:8080/pkg/beamrs.wasm --output /tmp/beamrs.wasm
+              test -s /tmp/beamrs.js
+              test -s /tmp/beamrs.wasm
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/beamrs.log
+          exit 1
