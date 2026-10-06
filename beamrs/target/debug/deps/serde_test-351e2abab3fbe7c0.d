@@ -1,0 +1,11 @@
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/serde_test-351e2abab3fbe7c0.d: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/assert.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/configure.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/de.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/error.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/ser.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/token.rs
+
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/libserde_test-351e2abab3fbe7c0.rmeta: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/assert.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/configure.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/de.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/error.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/ser.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/token.rs
+
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/lib.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/assert.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/configure.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/de.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/error.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/ser.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_test-1.0.177/src/token.rs:

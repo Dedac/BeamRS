@@ -1,0 +1,11 @@
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/manyhow-d5305a398026a8e8.d: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/span_ranged.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/macro_rules.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/error.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/parse_to_tokens.rs
+
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/libmanyhow-d5305a398026a8e8.rlib: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/span_ranged.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/macro_rules.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/error.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/parse_to_tokens.rs
+
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/libmanyhow-d5305a398026a8e8.rmeta: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/span_ranged.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/macro_rules.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/error.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/parse_to_tokens.rs
+
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/lib.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/span_ranged.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/macro_rules.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/error.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manyhow-0.10.4/src/parse_to_tokens.rs:

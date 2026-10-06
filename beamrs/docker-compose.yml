@@ -1,0 +1,28 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: beamrs-db
+    environment:
+      POSTGRES_DB: beamrs
+      POSTGRES_USER: beamrs
+      POSTGRES_PASSWORD: beamrs
+    ports:
+      - "5432:5432"
+    volumes:
+      - beamrs-pg:/var/lib/postgresql/data
+
+  app:
+    build: .
+    container_name: beamrs-app
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://beamrs:beamrs@db:5432/beamrs
+      HOST: 0.0.0.0
+      PORT: 8080
+    ports:
+      - "8080:8080"
+
+volumes:
+  beamrs-pg:

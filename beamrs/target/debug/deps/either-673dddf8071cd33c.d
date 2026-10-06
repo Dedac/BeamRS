@@ -1,0 +1,11 @@
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/either-673dddf8071cd33c.d: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/serde_untagged.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/serde_untagged_optional.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/iterator.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/into_either.rs
+
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/libeither-673dddf8071cd33c.rlib: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/serde_untagged.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/serde_untagged_optional.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/iterator.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/into_either.rs
+
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/libeither-673dddf8071cd33c.rmeta: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/serde_untagged.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/serde_untagged_optional.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/iterator.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/into_either.rs
+
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/lib.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/serde_untagged.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/serde_untagged_optional.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/iterator.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.19.0/src/into_either.rs:

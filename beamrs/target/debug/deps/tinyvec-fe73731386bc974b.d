@@ -1,0 +1,11 @@
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/tinyvec-fe73731386bc974b.d: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/array.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/array/const_generic_impl.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/arrayvec.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/arrayvec_drain.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/slicevec.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/tinyvec.rs
+
+/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/deps/libtinyvec-fe73731386bc974b.rmeta: /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/lib.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/array.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/array/const_generic_impl.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/arrayvec.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/arrayvec_drain.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/slicevec.rs /Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/tinyvec.rs
+
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/lib.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/array.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/array/const_generic_impl.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/arrayvec.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/arrayvec_drain.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/slicevec.rs:
+/Users/dedac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tinyvec-1.13.3/src/tinyvec.rs:
