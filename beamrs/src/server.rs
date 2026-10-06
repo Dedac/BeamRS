@@ -2,19 +2,23 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
-    extract::{rejection::JsonRejection, Path, State},
-    http::StatusCode,
+    body::Body,
+    extract::{rejection::JsonRejection, FromRef, Path, State},
+    http::{Request, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{delete, get, patch, post},
     Json, Router,
 };
+use leptos::{get_configuration, LeptosOptions};
+use leptos_axum::{generate_route_list, LeptosRoutes};
 use serde::Serialize;
+use tower::ServiceExt;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use urlencoding::decode;
 
 use crate::{
-    app::{escape_html, render_page, render_ray_cards, ActivePage},
+    app::App,
     config::Settings,
     domain::{
         Frequency, FrequencyInput, PrismInput, PrismResult, Ray, RayInput, User, UsernameInput,
@@ -22,9 +26,10 @@ use crate::{
     repository::{BeamRepository, BeamStore, RepositoryError},
 };
 
-#[derive(Clone)]
+#[derive(Clone, FromRef)]
 pub struct AppState {
     pub repo: Arc<dyn BeamStore>,
+    pub leptos_options: LeptosOptions,
 }
 
 pub async fn run() -> Result<()> {
@@ -46,18 +51,23 @@ pub async fn run() -> Result<()> {
 
     let state = AppState {
         repo: Arc::new(BeamRepository::new(pool)),
+        leptos_options: {
+            let mut options = get_configuration(None).await?.leptos_options;
+            options.site_addr = format!("{}:{}", settings.host, settings.port).parse()?;
+            options
+        },
     };
+    let address = state.leptos_options.site_addr;
     let app = router(state);
-    let address = format!("{}:{}", settings.host, settings.port);
-    let listener = tokio::net::TcpListener::bind(&address).await?;
+    let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!("BeamRS listening on http://{address}");
     axum::serve(listener, app).await?;
     Ok(())
 }
 
 pub fn router(state: AppState) -> Router {
+    let routes = generate_route_list(App);
     Router::new()
-        .route("/", get(home_page))
         .route("/health", get(health_check))
         .route(
             "/api/frequencies",
@@ -77,13 +87,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/rays", post(create_ray))
         .route("/api/prisms", post(add_prism))
         .route("/api/prisms/:user_id/:ray_id", delete(remove_prism))
-        .route("/settings", get(settings_page))
-        .route("/user/:username", get(user_page))
-        .route("/frequency/:frequency_id", get(frequency_page))
-        .nest_service(
-            "/static",
-            ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/static")),
-        )
+        .leptos_routes(&state, routes, App)
+        .fallback(file_and_error_handler)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -92,151 +97,23 @@ async fn health_check() -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
-async fn home_page(State(state): State<AppState>) -> Result<Html<String>, AppError> {
-    let frequencies = state.repo.list_frequencies().await?;
-    let content = r##"
-        <section class="welcome-panel">
-            <div class="eyebrow">Rust-powered transmission</div>
-            <h1>Welcome to <span>BeamRS</span></h1>
-            <p>Pick a frequency, send a ray, and prism the signals that deserve a wider spectrum.</p>
-            <div class="welcome-actions">
-                <a class="primary-button" href="#frequency-form">Create a frequency</a>
-                <a class="text-link" href="/settings">Tune your identity →</a>
-            </div>
-        </section>
-        <section class="explainer-grid" aria-label="How BeamRS works">
-            <article><strong>01</strong><h2>Tune in</h2><p>Frequencies keep every conversation on wavelength.</p></article>
-            <article><strong>02</strong><h2>Send a ray</h2><p>Share a focused thought in 300 characters or fewer.</p></article>
-            <article><strong>03</strong><h2>Prism it</h2><p>Refract a great ray to show that it resonated.</p></article>
-        </section>
-    "##;
-    Ok(Html(render_page(
-        "Home",
-        ActivePage::Home,
-        frequencies,
-        content.to_string(),
-    )))
-}
-
-async fn settings_page(State(state): State<AppState>) -> Result<Html<String>, AppError> {
-    let frequencies = state.repo.list_frequencies().await?;
-    let content = r#"
-        <section class="page-heading">
-            <div><span class="eyebrow">Signal controls</span><h1>Settings</h1></div>
-            <p>Your identity is stored in this browser. BeamRS has no authentication, matching the original Beam experience.</p>
-        </section>
-        <div class="settings-grid">
-            <section class="panel">
-                <h2>Display name</h2>
-                <p>Use letters, numbers, dashes, or underscores. Changing this name updates your existing profile.</p>
-                <form id="username-form" class="stacked-form">
-                    <label for="username-input">Username</label>
-                    <input id="username-input" name="username" maxlength="40" autocomplete="nickname" required />
-                    <button class="primary-button" type="submit">Update identity</button>
-                    <p class="form-status" role="status"></p>
-                </form>
-            </section>
-            <section class="panel beam-lab">
-                <div>
-                    <span class="eyebrow">Optics lab</span>
-                    <h2>Beam pass counter</h2>
-                    <p>A tiny Rust-inspired signal, rendered with the browser canvas.</p>
-                </div>
-                <canvas id="beam-canvas" width="640" height="220" aria-label="Animated red beam traveling across an optics track"></canvas>
-                <div class="counter"><strong id="beam-pass-count">0</strong><span>completed passes</span></div>
-            </section>
-        </div>
-    "#;
-    Ok(Html(render_page(
-        "Settings",
-        ActivePage::Settings,
-        frequencies,
-        content.to_string(),
-    )))
-}
-
-async fn user_page(
-    Path(username): Path<String>,
-    State(state): State<AppState>,
-) -> Result<Html<String>, AppError> {
-    let username = decode_path(&username)?;
-    let frequencies = state.repo.list_frequencies().await?;
-    let authored = state.repo.list_rays_by_user(&username).await?;
-    let prismed = state.repo.list_rays_prismed_by_user(&username).await?;
-    let content = format!(
-        r#"
-        <section class="profile-header">
-            <div class="avatar" aria-hidden="true">{initial}</div>
-            <div><span class="eyebrow">Beam profile</span><h1>@{username}</h1><p>{authored_count} authored rays · {prismed_count} prismed rays</p></div>
-        </section>
-        <section class="feed-section">
-            <div class="section-title"><h2>Authored rays</h2><span>{authored_count}</span></div>
-            <div class="ray-list">{authored}</div>
-        </section>
-        <section class="feed-section">
-            <div class="section-title"><h2>Prismed rays</h2><span>{prismed_count}</span></div>
-            <div class="ray-list">{prismed}</div>
-        </section>
-        "#,
-        initial = escape_html(&username.chars().next().unwrap_or('?').to_string()),
-        username = escape_html(&username),
-        authored_count = authored.len(),
-        prismed_count = prismed.len(),
-        authored = render_ray_cards(&authored, "No rays transmitted by this user yet."),
-        prismed = render_ray_cards(&prismed, "No rays prismed by this user yet."),
-    );
-    Ok(Html(render_page(
-        &format!("@{username}"),
-        ActivePage::User,
-        frequencies,
-        content,
-    )))
-}
-
-async fn frequency_page(
-    Path(frequency_id): Path<i32>,
-    State(state): State<AppState>,
-) -> Result<Html<String>, AppError> {
-    let frequencies = state.repo.list_frequencies().await?;
-    let frequency = frequencies
-        .iter()
-        .find(|frequency| frequency.id == frequency_id)
-        .cloned()
-        .ok_or_else(|| AppError::not_found(format!("frequency {frequency_id} not found")))?;
-    let rays = state.repo.list_rays_by_frequency(frequency_id).await?;
-    let content = format!(
-        r#"
-        <section class="page-heading frequency-heading">
-            <div><span class="eyebrow">Frequency {id}</span><h1>#{name}</h1></div>
-            <p>{count} rays currently traveling on this wavelength.</p>
-        </section>
-        <section class="composer-panel">
-            <form id="ray-form" data-frequency-id="{id}">
-                <label for="ray-text">Send a ray to #{name}</label>
-                <textarea id="ray-text" name="text" maxlength="300" rows="3" placeholder="What is on your wavelength?" required></textarea>
-                <div class="composer-footer">
-                    <span><span id="ray-character-count">0</span>/300</span>
-                    <button class="primary-button" type="submit">Transmit ray</button>
-                </div>
-                <p class="form-status" role="status"></p>
-            </form>
-        </section>
-        <section class="feed-section">
-            <div class="section-title"><h2>Latest rays</h2><span>{count}</span></div>
-            <div class="ray-list">{ray_cards}</div>
-        </section>
-        "#,
-        id = frequency.id,
-        name = escape_html(&frequency.name),
-        count = rays.len(),
-        ray_cards = render_ray_cards(&rays, "This frequency is quiet. Send the first ray."),
-    );
-    Ok(Html(render_page(
-        &format!("#{}", frequency.name),
-        ActivePage::Frequency,
-        frequencies,
-        content,
-    )))
+async fn file_and_error_handler(State(state): State<AppState>, request: Request<Body>) -> Response {
+    let response = ServeDir::new(&state.leptos_options.site_root)
+        .precompressed_gzip()
+        .precompressed_br()
+        .oneshot(request)
+        .await;
+    match response {
+        Ok(response) => response.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "static file service failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html("The requested asset could not be served."),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn list_frequencies(State(state): State<AppState>) -> Result<Json<Vec<Frequency>>, AppError> {
@@ -658,8 +535,13 @@ mod tests {
     }
 
     fn test_app() -> Router {
+        let leptos_options = LeptosOptions {
+            output_name: "beamrs".to_string(),
+            ..LeptosOptions::default()
+        };
         router(AppState {
             repo: Arc::new(MemoryStore::seeded()),
+            leptos_options,
         })
     }
 
@@ -718,6 +600,20 @@ mod tests {
         .await;
         assert_eq!(first.0, StatusCode::OK);
         assert_eq!(first.1, second.1);
+    }
+
+    #[tokio::test]
+    async fn page_shell_bootstraps_the_rust_wasm_bundle() {
+        let response = test_app()
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let html = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(html.starts_with("<!DOCTYPE html>"));
+        assert!(html.contains("/pkg/beamrs.js"));
+        assert!(!html.contains("/static/app.js"));
     }
 
     #[tokio::test]

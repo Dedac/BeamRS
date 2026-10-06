@@ -33,3 +33,7 @@ route:
 ## Run status
 
 Approved scope: feature parity with Dedac/Beam using a Rust stack centered on Leptos + Axum + PostgreSQL.
+
+The run was reopened after a completion audit found that browser behavior had
+been implemented in handwritten JavaScript rather than hydrated Leptos. The
+approved architecture is now enforced with cargo-leptos SSR/hydration builds.

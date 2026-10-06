@@ -19,6 +19,7 @@ body { margin: 0; color: var(--text); background: radial-gradient(circle at 80% 
 a { color: inherit; }
 button, input, textarea { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
+button:disabled { cursor: wait; opacity: .65; }
 
 .skip-link { position: fixed; z-index: 100; top: .5rem; left: .5rem; padding: .7rem 1rem; background: white; color: black; transform: translateY(-150%); }
 .skip-link:focus { transform: translateY(0); }
@@ -39,6 +40,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .sidebar-heading h2 { margin: 0; font-size: .78rem; text-transform: uppercase; letter-spacing: .16em; color: var(--muted); }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 12px var(--cyan); }
 .frequency-list { display: flex; flex-direction: column; gap: .25rem; }
+.loading-state, .inline-error { padding: .6rem .8rem; color: var(--muted); font-size: .82rem; }
+.inline-error { color: var(--red-soft); }
 .frequency-list a { padding: .72rem .8rem; border-radius: .45rem; text-decoration: none; color: #cbd2de; font-weight: 600; }
 .frequency-list a span { color: #566176; margin-right: .55rem; }
 .frequency-list a:hover, .frequency-list a:focus-visible { background: var(--surface-2); color: white; }
@@ -95,6 +98,10 @@ input:focus, textarea:focus { border-color: var(--red); box-shadow: 0 0 0 3px rg
 .prism-icon { margin-right: .3rem; }
 .empty-state { border: 1px dashed var(--border); border-radius: .65rem; color: var(--muted); padding: 2.5rem; text-align: center; }
 .empty-state > span { color: #465166; font-size: 2rem; }
+.page-state { border: 1px dashed var(--border); border-radius: .7rem; padding: 3rem; color: var(--muted); text-align: center; }
+.page-state.error { border-color: #8c3041; background: #201116; }
+.page-state h1 { color: var(--text); margin-top: 0; }
+.page-state .primary-button { margin-top: 1rem; }
 
 .profile-header { display: flex; align-items: center; gap: 1.3rem; border-bottom: 1px solid var(--border); padding-bottom: 2rem; }
 .avatar { width: 72px; height: 72px; display: grid; place-items: center; border-radius: 50%; background: linear-gradient(145deg, var(--red), #63162b); font-size: 2rem; font-weight: 900; box-shadow: 0 0 35px rgba(255, 48, 79, .2); }

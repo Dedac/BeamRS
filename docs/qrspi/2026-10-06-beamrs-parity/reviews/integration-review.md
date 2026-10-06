@@ -14,8 +14,11 @@ reviewed: 2026-10-06
   details, enabling deterministic API tests.
 - PostgreSQL queries return aggregate prism counts and usernames without
   per-card query loops.
-- Leptos renders the shell and initial page content; the browser bridge is
-  limited to local storage, fetch interactions, and Canvas animation.
+- Leptos renders one typed component tree for SSR and browser hydration.
+- Leptos Router and signals own navigation, local identity, forms, REST
+  interactions, prism toggles, and state presentation.
+- Browser-only storage, networking, and Canvas access are implemented in Rust
+  through `gloo-net` and `web_sys`; no handwritten application JavaScript remains.
 - All state changes use POST, PATCH, or DELETE.
 - Static assets are included in the runtime Docker image.
 
@@ -26,3 +29,9 @@ placeholder strings. The implementation loop returned to structure and plan:
 generated files were removed, CI moved to the repository workflow directory,
 the repository gained an interface boundary, and the UI was rebuilt as an
 integrated feature slice. No approved product behavior changed.
+
+A later completion audit found that the integrated UI still placed the browser
+application in `static/app.js`. The run returned again to research, design,
+structure, plan, implementation, integration, and test. `static/app.js` was
+deleted, string/`inner_html` rendering was replaced with components, and
+cargo-leptos became the reproducible full-stack build.

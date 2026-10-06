@@ -15,10 +15,27 @@ reviewed: 2026-10-06
 - Ray creation and frequency listing as a core user flow.
 - Prism add/remove idempotency.
 - PostgreSQL migration and seeded-data smoke checks.
-- Format, clippy with warnings denied, tests, release build, and Docker build.
+- Format, native and WASM clippy with warnings denied, tests, cargo-leptos
+  release build, generated WASM/loader assertions, and Docker build.
 
 ## Acceptance
 
 The required Beam feature inventory is implemented without placeholder or TODO
-behavior. Remaining security limitations are inherent to the explicitly
-approved anonymous identity model and are documented in the README.
+behavior. The browser bundle is generated from Rust and contains the hydrated
+Leptos application rather than a handwritten JavaScript implementation.
+Remaining security limitations are inherent to the explicitly approved
+anonymous identity model and are documented in the README.
+
+## Hydration remediation verification
+
+- QRSPI validator: passed.
+- `cargo fmt --all -- --check`: passed.
+- Native SSR clippy with warnings denied: passed.
+- `wasm32-unknown-unknown` hydration clippy with warnings denied: passed.
+- Unit/API tests: 14 passed.
+- `cargo leptos build --release`: passed and emitted non-empty
+  `target/site/pkg/beamrs.js` and `beamrs.wasm`.
+- PostgreSQL production-binary smoke: SSR shell, generated assets, user/ray
+  creation, prism, and unprism passed.
+- Docker image build and container runtime smoke: passed with generated JS/WASM
+  served from the final image.

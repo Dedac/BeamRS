@@ -13,9 +13,10 @@ animated canvas beam and visible pass counter.
 
 ```text
 Browser
-  ├── Leptos server-rendered pages
-  ├── accessible responsive CSS
-  └── small JavaScript bridge for local identity, fetch, and Canvas APIs
+  ├── hydrated Leptos router and reactive components compiled to WASM
+  ├── Rust client module for local identity and REST calls
+  ├── web_sys Canvas animation
+  └── accessible responsive CSS
           │
           ▼
 Axum router / REST API
@@ -27,14 +28,19 @@ BeamStore boundary
 SQLx PostgreSQL repository
 ```
 
-The browser bridge is intentionally limited to APIs that require browser
-state or imperative access. Page structure and initial content are rendered by
-Leptos on the server. Axum owns pages, static assets, health checks, and the
-JSON API. SQLx runs embedded migrations at startup.
+The server and browser render the same Leptos component tree. `cargo-leptos`
+builds the Axum SSR binary and the hydration library as a `wasm32` bundle;
+there is no handwritten application JavaScript. Rust reactive signals own
+navigation, forms, loading/error/empty states, identity, and prism controls.
+The browser-only layer uses `gloo-net` for the existing REST API and `web_sys`
+for local storage and Canvas. Axum owns SSR, generated assets, health checks,
+and the JSON API. SQLx runs embedded migrations at startup.
 
 ## Prerequisites
 
 - Rust stable
+- `wasm32-unknown-unknown`
+- `cargo-leptos` 0.2.34
 - PostgreSQL 16+, or Docker with Docker Compose
 
 ## Run locally
@@ -43,7 +49,9 @@ JSON API. SQLx runs embedded migrations at startup.
 cd beamrs
 cp .env.example .env
 docker compose up -d db
-cargo run
+rustup target add wasm32-unknown-unknown
+cargo install cargo-leptos --version 0.2.34 --locked
+cargo leptos watch
 ```
 
 Open <http://localhost:8080>. The application automatically applies migrations
@@ -55,7 +63,8 @@ To use an existing PostgreSQL instance, set:
 export DATABASE_URL=postgresql://beamrs:beamrs@localhost:5432/beamrs
 export HOST=127.0.0.1
 export PORT=8080
-cargo run --manifest-path beamrs/Cargo.toml
+cd beamrs
+cargo leptos watch
 ```
 
 `DATABASE_URL` is required. `HOST` defaults to `0.0.0.0`, and `PORT` defaults
@@ -102,9 +111,11 @@ an appropriate HTTP status.
 ./scripts/validate-qrspi.sh docs/qrspi/2026-10-06-beamrs-parity
 cd beamrs
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets --features ssr -- -D warnings
+cargo clippy --lib --no-default-features --features hydrate \
+  --target wasm32-unknown-unknown -- -D warnings
 cargo test --all-targets
-cargo build --release
+cargo leptos build --release
 ```
 
 CI also starts the application against PostgreSQL and checks the health route.

@@ -27,3 +27,5 @@ phase: questions
 - Secure, explicit state changes on POST/DELETE semantics
 - Demo data enabled by default for local development
 - CI covering format, clippy, tests, and build
+- One shared Leptos component tree for Axum SSR and Rust/WASM hydration
+- No handwritten application JavaScript; browser APIs remain isolated Rust interop
