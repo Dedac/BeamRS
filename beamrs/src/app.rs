@@ -29,6 +29,19 @@ impl ToastContext {
     }
 }
 
+#[derive(Clone, Copy)]
+struct FrequencyCreationContext {
+    expanded: RwSignal<bool>,
+    focus_requested: RwSignal<bool>,
+}
+
+impl FrequencyCreationContext {
+    fn trigger(self) {
+        self.expanded.set(true);
+        self.focus_requested.set(true);
+    }
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
@@ -37,8 +50,13 @@ pub fn App() -> impl IntoView {
     let toast = ToastContext {
         state: create_rw_signal(None),
     };
+    let frequency_creation = FrequencyCreationContext {
+        expanded: create_rw_signal(false),
+        focus_requested: create_rw_signal(false),
+    };
     provide_context(identity);
     provide_context(toast);
+    provide_context(frequency_creation);
 
     create_effect(move |_| {
         spawn_local(async move {
@@ -119,6 +137,18 @@ fn Sidebar() -> impl IntoView {
     let pending = create_rw_signal(false);
     let status = create_rw_signal(None::<(String, bool)>);
     let navigate = use_navigate();
+    let frequency_creation = expect_context::<FrequencyCreationContext>();
+    let name_input = create_node_ref::<html::Input>();
+
+    create_effect(move |_| {
+        if frequency_creation.focus_requested.get() {
+            frequency_creation.focus_requested.set(false);
+            if let Some(input) = name_input.get() {
+                let _ = input.focus();
+                input.select();
+            }
+        }
+    });
 
     let submit = move |event: ev::SubmitEvent| {
         event.prevent_default();
@@ -178,7 +208,13 @@ fn Sidebar() -> impl IntoView {
                     }
                 }}
             </nav>
-            <form class="compact-form" on:submit=submit>
+            <form
+                id="frequency-creation-form"
+                class=move || {
+                    if frequency_creation.expanded.get() { "compact-form visible" } else { "compact-form" }
+                }
+                on:submit=submit
+            >
                 <label for="frequency-name">"New frequency"</label>
                 <div class="input-row">
                     <input
@@ -187,6 +223,7 @@ fn Sidebar() -> impl IntoView {
                         maxlength="60"
                         placeholder="rustaceans"
                         required
+                        node_ref=name_input
                         prop:value=move || name.get()
                         on:input=move |event| name.set(event_target_value(&event))
                     />
@@ -220,6 +257,11 @@ fn IdentityCard() -> impl IntoView {
 
 #[component]
 fn HomePage() -> impl IntoView {
+    let frequency_creation = expect_context::<FrequencyCreationContext>();
+    let on_create_frequency = move |_| {
+        frequency_creation.trigger();
+    };
+
     view! {
         <Title text="Home | BeamRS"/>
         <section class="welcome-panel">
@@ -227,7 +269,14 @@ fn HomePage() -> impl IntoView {
             <h1>"Welcome to " <span>"BeamRS"</span></h1>
             <p>"Pick a frequency, send a ray, and prism the signals that deserve a wider spectrum."</p>
             <div class="welcome-actions">
-                <a class="primary-button" href="#frequency-name">"Create a frequency"</a>
+                <button
+                    type="button"
+                    class="primary-button"
+                    aria-controls="frequency-creation-form"
+                    on:click=on_create_frequency
+                >
+                    "Create a frequency"
+                </button>
                 <A class="text-link" href="/settings">"Tune your identity →"</A>
             </div>
         </section>

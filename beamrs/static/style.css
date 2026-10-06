@@ -46,6 +46,7 @@ button:disabled { cursor: wait; opacity: .65; }
 .frequency-list a span { color: #566176; margin-right: .55rem; }
 .frequency-list a:hover, .frequency-list a:focus-visible { background: var(--surface-2); color: white; }
 .compact-form { border-top: 1px solid var(--border); padding-top: 1.1rem; }
+.compact-form.visible { display: block; }
 .compact-form label, .stacked-form label, .composer-panel label { display: block; margin-bottom: .55rem; color: var(--muted); font-size: .82rem; font-weight: 700; }
 .input-row { display: grid; grid-template-columns: 1fr auto; gap: .4rem; }
 input, textarea { width: 100%; color: var(--text); background: #0b0f16; border: 1px solid var(--border); border-radius: .45rem; padding: .75rem .8rem; outline: none; }
