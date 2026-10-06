@@ -42,7 +42,7 @@ jobs:
       - name: Install cargo-leptos
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-leptos@0.2.34
+          tool: cargo-leptos@0.3.11
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy server

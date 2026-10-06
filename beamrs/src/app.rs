@@ -1,8 +1,13 @@
 use std::time::Duration;
 
-use leptos::*;
+use leptos::{ev, html, hydration::HydrationScripts, prelude::*, task::spawn_local};
+use leptos_dom::helpers::set_timeout;
 use leptos_meta::*;
-use leptos_router::*;
+use leptos_router::{
+    components::{Route, Router, Routes, A},
+    hooks::{use_location, use_navigate, use_params_map},
+    path,
+};
 
 use crate::{
     client,
@@ -46,19 +51,19 @@ impl FrequencyCreationContext {
 pub fn App() -> impl IntoView {
     provide_meta_context();
 
-    let identity = create_rw_signal(IdentityState::Loading);
+    let identity = RwSignal::new(IdentityState::Loading);
     let toast = ToastContext {
-        state: create_rw_signal(None),
+        state: RwSignal::new(None),
     };
     let frequency_creation = FrequencyCreationContext {
-        expanded: create_rw_signal(false),
-        focus_requested: create_rw_signal(false),
+        expanded: RwSignal::new(false),
+        focus_requested: RwSignal::new(false),
     };
     provide_context(identity);
     provide_context(toast);
     provide_context(frequency_creation);
 
-    create_effect(move |_| {
+    Effect::new(move |_| {
         spawn_local(async move {
             match client::load_identity().await {
                 Ok(user) => identity.set(IdentityState::Ready(user)),
@@ -68,27 +73,36 @@ pub fn App() -> impl IntoView {
     });
 
     view! {
-        <Stylesheet id="leptos" href="/pkg/beamrs.css"/>
-        <Title text="BeamRS"/>
-        <Meta name="description" content="BeamRS, a pun-powered social feed built with Rust"/>
-        <Router fallback=|| view! { <NotFoundPage/> }.into_view()>
-            <a class="skip-link" href="#main-content">"Skip to content"</a>
-            <SiteHeader/>
-            <div class="app-layout">
-                <Sidebar/>
-                <main id="main-content" class="main-content">
-                    <div class="content-frame">
-                        <Routes>
-                            <Route path="" view=HomePage/>
-                            <Route path="/settings" view=SettingsPage/>
-                            <Route path="/frequency/:frequency_id" view=FrequencyPage/>
-                            <Route path="/user/:username" view=UserPage/>
-                        </Routes>
+        <!DOCTYPE html>
+        <html lang="en">
+            <head>
+                <Stylesheet id="leptos" href="/pkg/beamrs.css"/>
+                <HydrationScripts options=leptos::config::LeptosOptions::builder().output_name("beamrs").build()/>
+                <Title text="BeamRS"/>
+                <Meta name="description" content="BeamRS, a pun-powered social feed built with Rust"/>
+                <MetaTags/>
+            </head>
+            <body>
+                <Router>
+                    <a class="skip-link" href="#main-content">"Skip to content"</a>
+                    <SiteHeader/>
+                    <div class="app-layout">
+                        <Sidebar/>
+                        <main id="main-content" class="main-content">
+                            <div class="content-frame">
+                                <Routes fallback=|| view! { <NotFoundPage/> }.into_view()>
+                                    <Route path=path!("") view=HomePage/>
+                                    <Route path=path!("/settings") view=SettingsPage/>
+                                    <Route path=path!("/frequency/:frequency_id") view=FrequencyPage/>
+                                    <Route path=path!("/user/:username") view=UserPage/>
+                                </Routes>
+                            </div>
+                        </main>
                     </div>
-                </main>
-            </div>
-            <Toast/>
-        </Router>
+                    <Toast/>
+                </Router>
+            </body>
+        </html>
     }
 }
 
@@ -103,7 +117,7 @@ fn SiteHeader() -> impl IntoView {
 
     view! {
         <header class="site-header">
-            <A class="brand" href="/" attr:aria-label="BeamRS home">
+            <A href="/" attr:class="brand" attr:aria-label="BeamRS home">
                 <span class="brand-mark" aria-hidden="true">"◭"</span>
                 <span>"BEAM"</span>
                 <small>"RS"</small>
@@ -112,19 +126,19 @@ fn SiteHeader() -> impl IntoView {
             <nav class="top-nav" aria-label="Primary navigation">
                 <A
                     href="/"
-                    class=move || if location.pathname.get() == "/" { "active" } else { "" }
+                    attr:class=move || if location.pathname.get() == "/" { "active" } else { "" }
                 >
                     "Home"
                 </A>
                 <A
                     href="/settings"
-                    class=move || {
+                    attr:class=move || {
                         if location.pathname.get() == "/settings" { "active" } else { "" }
                     }
                 >
                     "Settings"
                 </A>
-                <A id="my-profile-link" href=profile_path>"See Myself"</A>
+                <A href=profile_path attr:id="my-profile-link">"See Myself"</A>
             </nav>
         </header>
     }
@@ -132,15 +146,15 @@ fn SiteHeader() -> impl IntoView {
 
 #[component]
 fn Sidebar() -> impl IntoView {
-    let frequencies = create_local_resource(|| (), |_| client::list_frequencies());
-    let name = create_rw_signal(String::new());
-    let pending = create_rw_signal(false);
-    let status = create_rw_signal(None::<(String, bool)>);
+    let frequencies = LocalResource::new(client::list_frequencies);
+    let name = RwSignal::new(String::new());
+    let pending = RwSignal::new(false);
+    let status = RwSignal::new(None::<(String, bool)>);
     let navigate = use_navigate();
     let frequency_creation = expect_context::<FrequencyCreationContext>();
-    let name_input = create_node_ref::<html::Input>();
+    let name_input = NodeRef::<html::Input>::new();
 
-    create_effect(move |_| {
+    Effect::new(move |_| {
         if frequency_creation.focus_requested.get() {
             frequency_creation.focus_requested.set(false);
             if let Some(input) = name_input.get() {
@@ -181,13 +195,13 @@ fn Sidebar() -> impl IntoView {
             </div>
             <nav class="frequency-list">
                 {move || match frequencies.get() {
-                    None => view! { <span class="loading-state">"Tuning…"</span> }.into_view(),
+                    None => view! { <span class="loading-state">"Tuning…"</span> }.into_any(),
                     Some(Err(error)) => {
-                        view! { <span class="inline-error">{error}</span> }.into_view()
+                        view! { <span class="inline-error">{error}</span> }.into_any()
                     }
                     Some(Ok(items)) if items.is_empty() => {
                         view! { <span class="loading-state">"No frequencies yet."</span> }
-                            .into_view()
+                            .into_any()
                     }
                     Some(Ok(items)) => {
                         view! {
@@ -204,7 +218,7 @@ fn Sidebar() -> impl IntoView {
                                 }
                             />
                         }
-                        .into_view()
+                        .into_any()
                     }
                 }}
             </nav>
@@ -277,7 +291,7 @@ fn HomePage() -> impl IntoView {
                 >
                     "Create a frequency"
                 </button>
-                <A class="text-link" href="/settings">"Tune your identity →"</A>
+                <A href="/settings" attr:class="text-link">"Tune your identity →"</A>
             </div>
         </section>
         <section class="explainer-grid" aria-label="How BeamRS works">
@@ -298,21 +312,28 @@ fn FrequencyPage() -> impl IntoView {
                 .and_then(|value| value.parse::<i32>().ok())
         })
     };
-    let page = create_local_resource(frequency_id, |frequency_id| async move {
-        let frequency_id = frequency_id.ok_or_else(|| "invalid frequency id".to_string())?;
-        let frequencies = client::list_frequencies().await?;
-        let frequency = frequencies
-            .into_iter()
-            .find(|frequency| frequency.id == frequency_id)
-            .ok_or_else(|| format!("frequency {frequency_id} not found"))?;
-        let rays = client::list_frequency_rays(frequency_id).await?;
-        Ok::<_, String>((frequency, rays))
+    let page = LocalResource::new(move || {
+        let frequency_id = frequency_id();
+        async move {
+            let frequency_id = frequency_id.ok_or_else(|| "invalid frequency id".to_string())?;
+            let frequencies = client::list_frequencies().await?;
+            let frequency = frequencies
+                .into_iter()
+                .find(|frequency| frequency.id == frequency_id)
+                .ok_or_else(|| format!("frequency {frequency_id} not found"))?;
+            let rays = client::list_frequency_rays(frequency_id).await?;
+            Ok::<_, String>((frequency, rays))
+        }
+    });
+    Effect::new(move |_| {
+        let _ = frequency_id();
+        page.refetch();
     });
 
     view! {
         {move || match page.get() {
-            None => view! { <PageLoading message="Loading frequency…"/> }.into_view(),
-            Some(Err(error)) => view! { <PageError message=error/> }.into_view(),
+            None => view! { <PageLoading message="Loading frequency…"/> }.into_any(),
+            Some(Err(error)) => view! { <PageError message=error/> }.into_any(),
             Some(Ok((frequency, rays))) => {
                 view! {
                     <Title text=format!("#{} | BeamRS", frequency.name)/>
@@ -335,7 +356,7 @@ fn FrequencyPage() -> impl IntoView {
                         />
                     </section>
                 }
-                .into_view()
+                .into_any()
             }
         }}
     }
@@ -344,9 +365,9 @@ fn FrequencyPage() -> impl IntoView {
 #[component]
 fn RayComposer(frequency: Frequency, on_created: impl Fn(Ray) + Clone + 'static) -> impl IntoView {
     let identity = expect_context::<RwSignal<IdentityState>>();
-    let text = create_rw_signal(String::new());
-    let pending = create_rw_signal(false);
-    let status = create_rw_signal(None::<(String, bool)>);
+    let text = RwSignal::new(String::new());
+    let pending = RwSignal::new(false);
+    let status = RwSignal::new(None::<(String, bool)>);
     let frequency_id = frequency.id;
     let frequency_name = frequency.name;
 
@@ -412,18 +433,25 @@ fn RayComposer(frequency: Frequency, on_created: impl Fn(Ray) + Clone + 'static)
 #[component]
 fn UserPage() -> impl IntoView {
     let params = use_params_map();
-    let username = move || params.with(|params| params.get("username").cloned());
-    let page = create_local_resource(username, |username| async move {
-        let username = username.ok_or_else(|| "missing username".to_string())?;
-        let authored = client::list_authored_rays(&username).await?;
-        let prismed = client::list_prismed_rays(&username).await?;
-        Ok::<_, String>((username, authored, prismed))
+    let username = move || params.with(|params| params.get("username"));
+    let page = LocalResource::new(move || {
+        let username = username();
+        async move {
+            let username = username.ok_or_else(|| "missing username".to_string())?;
+            let authored = client::list_authored_rays(&username).await?;
+            let prismed = client::list_prismed_rays(&username).await?;
+            Ok::<_, String>((username, authored, prismed))
+        }
+    });
+    Effect::new(move |_| {
+        let _ = username();
+        page.refetch();
     });
 
     view! {
         {move || match page.get() {
-            None => view! { <PageLoading message="Loading profile…"/> }.into_view(),
-            Some(Err(error)) => view! { <PageError message=error/> }.into_view(),
+            None => view! { <PageLoading message="Loading profile…"/> }.into_any(),
+            Some(Err(error)) => view! { <PageError message=error/> }.into_any(),
             Some(Ok((username, authored, prismed))) => {
                 let initial = username.chars().next().unwrap_or('?');
                 view! {
@@ -461,7 +489,7 @@ fn UserPage() -> impl IntoView {
                         />
                     </section>
                 }
-                .into_view()
+                .into_any()
             }
         }}
     }
@@ -470,12 +498,12 @@ fn UserPage() -> impl IntoView {
 #[component]
 fn SettingsPage() -> impl IntoView {
     let identity = expect_context::<RwSignal<IdentityState>>();
-    let username = create_rw_signal(String::new());
-    let pending = create_rw_signal(false);
-    let status = create_rw_signal(None::<(String, bool)>);
+    let username = RwSignal::new(String::new());
+    let pending = RwSignal::new(false);
+    let status = RwSignal::new(None::<(String, bool)>);
     let toast = expect_context::<ToastContext>();
 
-    create_effect(move |_| {
+    Effect::new(move |_| {
         if let IdentityState::Ready(user) = identity.get() {
             username.set(user.username);
         }
@@ -551,12 +579,12 @@ fn SettingsPage() -> impl IntoView {
 
 #[component]
 fn BeamCanvas() -> impl IntoView {
-    let canvas = create_node_ref::<html::Canvas>();
+    let canvas = NodeRef::<html::Canvas>::new();
     let _canvas_for_view = canvas;
-    let passes = create_rw_signal(0_u32);
+    let passes = RwSignal::new(0_u32);
 
     #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
-    create_effect(move |_| start_beam_animation(canvas, passes));
+    Effect::new(move |_| start_beam_animation(canvas, passes));
 
     view! {
         <section class="panel beam-lab">
@@ -586,13 +614,14 @@ fn start_beam_animation(canvas: NodeRef<html::Canvas>, passes: RwSignal<u32>) {
         rc::Rc,
     };
 
+    use send_wrapper::SendWrapper;
     use wasm_bindgen::{closure::Closure, JsCast};
     use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
     let Some(canvas) = canvas.get() else {
         return;
     };
-    let canvas: HtmlCanvasElement = (*canvas).clone();
+    let canvas: HtmlCanvasElement = (*canvas).clone().unchecked_into();
     let Ok(Some(context)) = canvas.get_context("2d") else {
         return;
     };
@@ -615,6 +644,9 @@ fn start_beam_animation(canvas: NodeRef<html::Canvas>, passes: RwSignal<u32>) {
     let animation_weak = Rc::downgrade(&animation);
     let window_ref = window.clone();
     let frame_id_ref = frame_id.clone();
+    let cleanup_frame_id = SendWrapper::new(frame_id.clone());
+    let cleanup_animation_ref = SendWrapper::new(animation_ref.clone());
+    let cleanup_window = SendWrapper::new(window.clone());
 
     *animation_ref.borrow_mut() = Some(Closure::wrap(Box::new(move |now: f64| {
         let start = started_at.get().unwrap_or_else(|| {
@@ -670,10 +702,10 @@ fn start_beam_animation(canvas: NodeRef<html::Canvas>, passes: RwSignal<u32>) {
         }
     }
     on_cleanup(move || {
-        if let Some(id) = frame_id.get() {
-            let _ = window.cancel_animation_frame(id);
+        if let Some(id) = cleanup_frame_id.get() {
+            let _ = cleanup_window.cancel_animation_frame(id);
         }
-        animation_ref.borrow_mut().take();
+        cleanup_animation_ref.borrow_mut().take();
     });
 }
 
@@ -686,7 +718,7 @@ fn RayList(rays: Vec<Ray>, empty_message: &'static str) -> impl IntoView {
                 <p>{empty_message}</p>
             </div>
         }
-        .into_view();
+        .into_any();
     }
 
     view! {
@@ -698,20 +730,20 @@ fn RayList(rays: Vec<Ray>, empty_message: &'static str) -> impl IntoView {
             />
         </div>
     }
-    .into_view()
+    .into_any()
 }
 
 #[component]
 fn RayCard(ray: Ray) -> impl IntoView {
     let identity = expect_context::<RwSignal<IdentityState>>();
     let toast = expect_context::<ToastContext>();
-    let count = create_rw_signal(ray.prism_count);
-    let prismed = create_rw_signal(false);
-    let pending = create_rw_signal(false);
+    let count = RwSignal::new(ray.prism_count);
+    let prismed = RwSignal::new(false);
+    let pending = RwSignal::new(false);
     let users_prismed = ray.users_prismed.clone();
     let ray_id = ray.id;
 
-    create_effect(move |_| {
+    Effect::new(move |_| {
         if let IdentityState::Ready(user) = identity.get() {
             prismed.set(
                 users_prismed
@@ -827,7 +859,7 @@ fn PageError(message: String) -> impl IntoView {
         <div class="page-state error" role="alert">
             <h1>"Signal lost"</h1>
             <p>{message}</p>
-            <A class="primary-button" href="/">"Return home"</A>
+            <A href="/" attr:class="primary-button">"Return home"</A>
         </div>
     }
 }
@@ -839,7 +871,7 @@ fn NotFoundPage() -> impl IntoView {
         <div class="page-state error">
             <h1>"Frequency not found"</h1>
             <p>"The requested route is outside the known spectrum."</p>
-            <A class="primary-button" href="/">"Return home"</A>
+            <A href="/" attr:class="primary-button">"Return home"</A>
         </div>
     }
 }

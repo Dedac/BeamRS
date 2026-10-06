@@ -9,7 +9,7 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use leptos::{get_configuration, LeptosOptions};
+use leptos::config::{get_configuration, LeptosOptions};
 use leptos_axum::{generate_route_list, LeptosRoutes};
 use serde::Serialize;
 use tower::ServiceExt;
@@ -52,7 +52,7 @@ pub async fn run() -> Result<()> {
     let state = AppState {
         repo: Arc::new(BeamRepository::new(pool)),
         leptos_options: {
-            let mut options = get_configuration(None).await?.leptos_options;
+            let mut options = get_configuration(None)?.leptos_options;
             options.site_addr = format!("{}:{}", settings.host, settings.port).parse()?;
             options
         },
@@ -74,19 +74,19 @@ pub fn router(state: AppState) -> Router {
             get(list_frequencies).post(create_frequency),
         )
         .route(
-            "/api/frequencies/:frequency_id/rays",
+            "/api/frequencies/{frequency_id}/rays",
             get(list_rays_by_frequency),
         )
         .route("/api/users", post(get_or_create_user))
-        .route("/api/users/:user_id", patch(update_user_name))
-        .route("/api/users/:username/rays", get(list_rays_by_user))
+        .route("/api/users/{user_id}", patch(update_user_name))
+        .route("/api/users/{username}/rays", get(list_rays_by_user))
         .route(
-            "/api/users/:username/prisms",
+            "/api/users/{username}/prisms",
             get(list_rays_prismed_by_user),
         )
         .route("/api/rays", post(create_ray))
         .route("/api/prisms", post(add_prism))
-        .route("/api/prisms/:user_id/:ray_id", delete(remove_prism))
+        .route("/api/prisms/{user_id}/{ray_id}", delete(remove_prism))
         .leptos_routes(&state, routes, App)
         .fallback(file_and_error_handler)
         .layer(TraceLayer::new_for_http())
@@ -98,7 +98,7 @@ async fn health_check() -> StatusCode {
 }
 
 async fn file_and_error_handler(State(state): State<AppState>, request: Request<Body>) -> Response {
-    let response = ServeDir::new(&state.leptos_options.site_root)
+    let response = ServeDir::new(state.leptos_options.site_root.as_ref())
         .precompressed_gzip()
         .precompressed_br()
         .oneshot(request)
@@ -535,10 +535,7 @@ mod tests {
     }
 
     fn test_app() -> Router {
-        let leptos_options = LeptosOptions {
-            output_name: "beamrs".to_string(),
-            ..LeptosOptions::default()
-        };
+        let leptos_options = LeptosOptions::builder().output_name("beamrs").build();
         router(AppState {
             repo: Arc::new(MemoryStore::seeded()),
             leptos_options,
