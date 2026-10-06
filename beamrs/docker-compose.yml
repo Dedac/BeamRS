@@ -1,22 +1,25 @@
-version: "3.9"
 services:
   db:
     image: postgres:16-alpine
-    container_name: beamrs-db
     environment:
       POSTGRES_DB: beamrs
       POSTGRES_USER: beamrs
       POSTGRES_PASSWORD: beamrs
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U beamrs -d beamrs"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
     volumes:
       - beamrs-pg:/var/lib/postgresql/data
 
   app:
     build: .
-    container_name: beamrs-app
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://beamrs:beamrs@db:5432/beamrs
       HOST: 0.0.0.0

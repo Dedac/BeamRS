@@ -1,13 +1,15 @@
-FROM rust:1.86-bookworm AS builder
+FROM rust:1.89-bookworm AS builder
 WORKDIR /app
-COPY beamrs ./beamrs
-WORKDIR /app/beamrs
+COPY . .
 RUN cargo build --release
 
 FROM debian:bookworm-slim
 WORKDIR /app
-COPY --from=builder /app/beamrs/target/release/beamrs /usr/local/bin/beamrs
+RUN useradd --create-home --uid 10001 beamrs
+COPY --from=builder /app/target/release/beamrs /usr/local/bin/beamrs
+COPY --from=builder /app/static ./static
 ENV HOST=0.0.0.0
 ENV PORT=8080
 EXPOSE 8080
+USER beamrs
 CMD ["/usr/local/bin/beamrs"]

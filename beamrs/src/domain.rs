@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+pub const MAX_USERNAME_LEN: usize = 40;
+pub const MAX_FREQUENCY_NAME_LEN: usize = 60;
+pub const MAX_RAY_TEXT_LEN: usize = 300;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct User {
     pub id: i32,
@@ -30,6 +34,36 @@ pub struct Prism {
     pub ray_id: i32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UsernameInput {
+    pub username: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FrequencyInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RayInput {
+    pub frequency_id: i32,
+    pub user_id: i32,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrismInput {
+    pub user_id: i32,
+    pub ray_id: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrismResult {
+    pub ray_id: i32,
+    pub prism_count: i32,
+    pub prismed: bool,
+}
+
 pub fn normalize_username(raw: &str) -> String {
     raw.trim().to_string()
 }
@@ -39,14 +73,10 @@ pub fn validate_username(value: &str) -> Result<String, String> {
     if username.is_empty() {
         return Err("username must not be blank".to_string());
     }
-    if username.len() > 40 {
-        return Err("username is too long".to_string());
-    }
-    if username.starts_with("Anon")
-        && username.len() > 4
-        && username[4..].chars().all(|c| c.is_ascii_digit())
-    {
-        return Ok(username);
+    if username.chars().count() > MAX_USERNAME_LEN {
+        return Err(format!(
+            "username must be at most {MAX_USERNAME_LEN} characters"
+        ));
     }
     if username
         .chars()
@@ -62,8 +92,10 @@ pub fn validate_frequency_name(value: &str) -> Result<String, String> {
     if name.is_empty() {
         return Err("frequency name must not be blank".to_string());
     }
-    if name.len() > 60 {
-        return Err("frequency name is too long".to_string());
+    if name.chars().count() > MAX_FREQUENCY_NAME_LEN {
+        return Err(format!(
+            "frequency name must be at most {MAX_FREQUENCY_NAME_LEN} characters"
+        ));
     }
     Ok(name)
 }
@@ -73,13 +105,15 @@ pub fn validate_ray_text(value: &str) -> Result<String, String> {
     if text.is_empty() {
         return Err("ray text must not be blank".to_string());
     }
-    if text.len() > 300 {
-        return Err("ray text is too long".to_string());
+    if text.chars().count() > MAX_RAY_TEXT_LEN {
+        return Err(format!(
+            "ray text must be at most {MAX_RAY_TEXT_LEN} characters"
+        ));
     }
     Ok(text)
 }
 
-pub fn generate_anonymous_name(seed: i32) -> String {
+pub fn generate_anonymous_name(seed: u32) -> String {
     format!("Anon{seed}")
 }
 
@@ -110,5 +144,20 @@ mod tests {
     fn frequency_names_are_trimmed() {
         let name = validate_frequency_name("  general  ").unwrap();
         assert_eq!(name, "general");
+    }
+
+    #[test]
+    fn usernames_reject_markup_and_spaces() {
+        assert!(validate_username("<script>").is_err());
+        assert!(validate_username("two words").is_err());
+        assert!(validate_username("beam-user_1").is_ok());
+    }
+
+    #[test]
+    fn validation_uses_character_limits() {
+        assert!(validate_username(&"a".repeat(MAX_USERNAME_LEN)).is_ok());
+        assert!(validate_username(&"a".repeat(MAX_USERNAME_LEN + 1)).is_err());
+        assert!(validate_frequency_name(&"光".repeat(MAX_FREQUENCY_NAME_LEN)).is_ok());
+        assert!(validate_ray_text(&"光".repeat(MAX_RAY_TEXT_LEN)).is_ok());
     }
 }

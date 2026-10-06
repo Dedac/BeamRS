@@ -1,0 +1,61 @@
+name: BeamRS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beamrs
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: beamrs
+          POSTGRES_USER: beamrs
+          POSTGRES_PASSWORD: beamrs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U beamrs -d beamrs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://beamrs:beamrs@localhost:5432/beamrs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: beamrs
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --all-targets
+      - name: Build
+        run: cargo build --release
+      - name: Smoke test migrations and server
+        run: |
+          cargo run > /tmp/beamrs.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:8080/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/beamrs.log
+          exit 1

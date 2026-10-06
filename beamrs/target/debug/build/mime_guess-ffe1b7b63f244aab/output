@@ -1,1 +1,0 @@
-cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/Users/dedac/projects/copilot-worktrees/BeamRS/dedac-curly-spoon/beamrs/target/debug/build/mime_guess-ffe1b7b63f244aab/out/mime_types_generated.rs
