@@ -30,4 +30,6 @@ modified.
 - WASM hydrate clippy with `-D warnings`
 - `cargo test --all-targets` (14 passed)
 - `cargo leptos build --release`
+- PostgreSQL 16 smoke test covering startup migrations, SSR shell generation,
+  hydration asset routing, and the frequency API
 - `./scripts/validate-qrspi.sh docs/qrspi/2026-10-06-leptos-0-8-21`

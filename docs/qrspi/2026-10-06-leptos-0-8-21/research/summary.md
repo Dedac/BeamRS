@@ -20,6 +20,20 @@ This migration starts from that approved state and does not replace it.
   `server.rs`; build and release surfaces are `Cargo.toml`, `Cargo.lock`,
   `.github/workflows/beamrs-ci.yml`, `beamrs/Dockerfile`, and `README.md`.
 
+## Resolved migration inventory
+
+- Direct crates: `leptos 0.8.21`, `leptos_axum 0.8.10`,
+  `leptos_dom 0.8.8`, `leptos_meta 0.8.7`, and
+  `leptos_router 0.8.16`.
+- Transitive Leptos crates: `leptos_config 0.8.10`,
+  `leptos_hot_reload 0.8.7`, `leptos_integration_utils 0.8.9`,
+  `leptos_macro 0.8.19`, `leptos_router_macro 0.8.7`, and
+  `leptos_server 0.8.8`.
+- Shared reactive/rendering infrastructure: `reactive_graph 0.2.15`,
+  `server_fn 0.8.13`, and `tachys 0.2.19`.
+- Build tooling: `cargo-leptos 0.3.11`, aligned in local documentation, CI,
+  and the production Docker image.
+
 ## Compatibility risks
 
 - Leptos 0.8 renamed or removed several legacy reactive constructors and

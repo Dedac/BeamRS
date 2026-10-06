@@ -94,7 +94,6 @@ assets-dir = "public"
 site-addr = "0.0.0.0:8080"
 reload-port = 3001
 browserquery = "defaults"
-env = "DEV"
 bin-features = ["ssr"]
 bin-default-features = false
 lib-features = ["hydrate"]
