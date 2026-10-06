@@ -1,0 +1,20 @@
+name: Validate QRSPI scaffold
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: sh -n scripts/validate-qrspi.sh
+      - name: Check template scaffold
+        run: |
+          run_dir="$(mktemp -d)"
+          cp -R templates/qrspi/. "$run_dir/"
+          mkdir -p "$run_dir/research" "$run_dir/tasks"
+          scripts/validate-qrspi.sh "$run_dir"
+
