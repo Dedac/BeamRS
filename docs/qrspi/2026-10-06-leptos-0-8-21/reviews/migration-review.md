@@ -23,6 +23,9 @@ modified.
 - The browser entry point must call `hydrate_body`, not the CSR-only
   `mount_to_body`; an independent browser audit found the latter duplicated
   the entire SSR component tree instead of attaching to it.
+- `LocalResource` tracks route parameters read by its fetcher. Redundant mount
+  effects were removed so frequency and profile routes do not issue duplicate
+  initial API requests.
 - `cargo-leptos 0.3.11` is required for the `wasm-bindgen 0.2.129` schema
   emitted by the Leptos 0.8 dependency graph.
 - The Docker builder was raised from Rust 1.89 to Rust 1.96 because

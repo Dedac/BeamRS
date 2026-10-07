@@ -334,10 +334,6 @@ fn FrequencyPage() -> impl IntoView {
             Ok::<_, String>((frequency, rays))
         }
     });
-    Effect::new(move |_| {
-        let _ = frequency_id();
-        page.refetch();
-    });
 
     view! {
         {move || match page.get() {
@@ -451,10 +447,6 @@ fn UserPage() -> impl IntoView {
             let prismed = client::list_prismed_rays(&username).await?;
             Ok::<_, String>((username, authored, prismed))
         }
-    });
-    Effect::new(move |_| {
-        let _ = username();
-        page.refetch();
     });
 
     view! {
