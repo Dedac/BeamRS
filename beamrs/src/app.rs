@@ -637,13 +637,19 @@ fn start_beam_animation(canvas: NodeRef<html::Canvas>, passes: RwSignal<u32>) {
     let duration = if reduce_motion { 8000.0 } else { 2600.0 };
     let started_at = Rc::new(Cell::new(None::<f64>));
     let frame_id = Rc::new(Cell::new(None::<i32>));
+    let running = Rc::new(Cell::new(true));
     let animation = Rc::new(RefCell::new(None::<Closure<dyn FnMut(f64)>>));
     let animation_ref = animation.clone();
-    let animation_weak = Rc::downgrade(&animation);
+    let animation_for_frame = animation.clone();
     let window_ref = window.clone();
     let frame_id_ref = frame_id.clone();
+    let running_ref = running.clone();
 
     *animation_ref.borrow_mut() = Some(Closure::wrap(Box::new(move |now: f64| {
+        if !running_ref.get() {
+            return;
+        }
+
         let start = started_at.get().unwrap_or_else(|| {
             started_at.set(Some(now));
             now
@@ -680,13 +686,9 @@ fn start_beam_animation(canvas: NodeRef<html::Canvas>, passes: RwSignal<u32>) {
         context.set_fill_style_str("#ff304f");
         context.fill_rect(x - 13.0, height / 2.0 - 18.0, 26.0, 36.0);
 
-        if let Some(animation) = animation_weak.upgrade() {
-            if let Some(callback) = animation.borrow().as_ref() {
-                if let Ok(id) =
-                    window_ref.request_animation_frame(callback.as_ref().unchecked_ref())
-                {
-                    frame_id_ref.set(Some(id));
-                }
+        if let Some(callback) = animation_for_frame.borrow().as_ref() {
+            if let Ok(id) = window_ref.request_animation_frame(callback.as_ref().unchecked_ref()) {
+                frame_id_ref.set(Some(id));
             }
         }
     }) as Box<dyn FnMut(f64)>));
@@ -699,6 +701,16 @@ fn start_beam_animation(canvas: NodeRef<html::Canvas>, passes: RwSignal<u32>) {
             }
         }
     }
+
+    let cleanup = send_wrapper::SendWrapper::new((running, frame_id, animation, window));
+    on_cleanup(move || {
+        let (running, frame_id, animation, window) = &*cleanup;
+        running.set(false);
+        if let Some(id) = frame_id.get() {
+            let _ = window.cancel_animation_frame(id);
+        }
+        animation.borrow_mut().take();
+    });
 }
 
 #[component]
