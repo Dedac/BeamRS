@@ -38,9 +38,9 @@ and the JSON API. SQLx runs embedded migrations at startup.
 
 ## Prerequisites
 
-- Rust stable
+- Rust 1.96 or newer
 - `wasm32-unknown-unknown`
-- `cargo-leptos` 0.2.34
+- `cargo-leptos` 0.3.11
 - PostgreSQL 16+, or Docker with Docker Compose
 
 ## Run locally
@@ -50,7 +50,7 @@ cd beamrs
 cp .env.example .env
 docker compose up -d db
 rustup target add wasm32-unknown-unknown
-cargo install cargo-leptos --version 0.2.34 --locked
+cargo install cargo-leptos --version 0.3.11 --locked
 cargo leptos watch
 ```
 
@@ -137,5 +137,7 @@ does not copy Beam's bundled assets or source verbatim.
 The implementation followed the repository's QRSPI+ workflow. The approved
 run, research, design, tasks, phase gates, and verification records live in
 [`docs/qrspi/2026-10-06-beamrs-parity/`](docs/qrspi/2026-10-06-beamrs-parity/).
+The Leptos 0.8.21 compatibility migration is recorded separately in
+[`docs/qrspi/2026-10-06-leptos-0-8-21/`](docs/qrspi/2026-10-06-leptos-0-8-21/).
 
 BeamRS is inspired by Dedac/Beam and is an independent Rust implementation.
