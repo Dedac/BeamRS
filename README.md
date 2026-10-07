@@ -38,7 +38,7 @@ and the JSON API. SQLx runs embedded migrations at startup.
 
 ## Prerequisites
 
-- Rust stable
+- Rust 1.96 or newer
 - `wasm32-unknown-unknown`
 - `cargo-leptos` 0.3.11
 - PostgreSQL 16+, or Docker with Docker Compose

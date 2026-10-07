@@ -1,4 +1,4 @@
-FROM rust:1.89-bookworm AS builder
+FROM rust:1.96-bookworm AS builder
 WORKDIR /app
 RUN rustup target add wasm32-unknown-unknown \
     && cargo install cargo-leptos --version 0.3.11 --locked

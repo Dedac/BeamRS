@@ -33,6 +33,9 @@ This migration starts from that approved state and does not replace it.
   `server_fn 0.8.13`, and `tachys 0.2.19`.
 - Build tooling: `cargo-leptos 0.3.11`, aligned in local documentation, CI,
   and the production Docker image.
+- Toolchain floor: `cargo-leptos 0.3.11 --locked` resolves
+  `cargo-util-schemas 0.14.2`, which requires Rust 1.96. The production
+  builder and documented prerequisites therefore use Rust 1.96 or newer.
 
 ## Compatibility risks
 
@@ -42,3 +45,6 @@ This migration starts from that approved state and does not replace it.
 - `leptos_axum` route generation and `LeptosRoutes` may require signature or
   trait import adjustments.
 - cargo-leptos and Rust/WASM lockfile versions must remain aligned.
+- The Docker builder toolchain must satisfy cargo-leptos's locked dependency
+  MSRV; retaining the previous Rust 1.89 image prevents the image from
+  building.

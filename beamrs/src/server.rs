@@ -18,7 +18,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use urlencoding::decode;
 
 use crate::{
-    app::App,
+    app::{shell, App},
     config::Settings,
     domain::{
         Frequency, FrequencyInput, PrismInput, PrismResult, Ray, RayInput, User, UsernameInput,
@@ -67,6 +67,7 @@ pub async fn run() -> Result<()> {
 
 pub fn router(state: AppState) -> Router {
     let routes = generate_route_list(App);
+    let leptos_options = state.leptos_options.clone();
     Router::new()
         .route("/health", get(health_check))
         .route(
@@ -87,7 +88,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/rays", post(create_ray))
         .route("/api/prisms", post(add_prism))
         .route("/api/prisms/{user_id}/{ray_id}", delete(remove_prism))
-        .leptos_routes(&state, routes, App)
+        .leptos_routes(&state, routes, move || shell(leptos_options.clone()))
         .fallback(file_and_error_handler)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use leptos::{ev, html, hydration::HydrationScripts, prelude::*, task::spawn_local};
+use leptos::{ev, html, prelude::*, task::spawn_local};
 use leptos_dom::helpers::set_timeout;
 use leptos_meta::*;
 use leptos_router::{
@@ -47,6 +47,24 @@ impl FrequencyCreationContext {
     }
 }
 
+pub fn shell(options: LeptosOptions) -> impl IntoView {
+    view! {
+        <!DOCTYPE html>
+        <html lang="en">
+            <head>
+                <meta charset="utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <AutoReload options=options.clone()/>
+                <HydrationScripts options/>
+                <MetaTags/>
+            </head>
+            <body>
+                <App/>
+            </body>
+        </html>
+    }
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
@@ -73,36 +91,27 @@ pub fn App() -> impl IntoView {
     });
 
     view! {
-        <!DOCTYPE html>
-        <html lang="en">
-            <head>
-                <Stylesheet id="leptos" href="/pkg/beamrs.css"/>
-                <HydrationScripts options=leptos::config::LeptosOptions::builder().output_name("beamrs").build()/>
-                <Title text="BeamRS"/>
-                <Meta name="description" content="BeamRS, a pun-powered social feed built with Rust"/>
-                <MetaTags/>
-            </head>
-            <body>
-                <Router>
-                    <a class="skip-link" href="#main-content">"Skip to content"</a>
-                    <SiteHeader/>
-                    <div class="app-layout">
-                        <Sidebar/>
-                        <main id="main-content" class="main-content">
-                            <div class="content-frame">
-                                <Routes fallback=|| view! { <NotFoundPage/> }.into_view()>
-                                    <Route path=path!("") view=HomePage/>
-                                    <Route path=path!("/settings") view=SettingsPage/>
-                                    <Route path=path!("/frequency/:frequency_id") view=FrequencyPage/>
-                                    <Route path=path!("/user/:username") view=UserPage/>
-                                </Routes>
-                            </div>
-                        </main>
+        <Stylesheet id="leptos" href="/pkg/beamrs.css"/>
+        <Title text="BeamRS"/>
+        <Meta name="description" content="BeamRS, a pun-powered social feed built with Rust"/>
+        <Router>
+            <a class="skip-link" href="#main-content">"Skip to content"</a>
+            <SiteHeader/>
+            <div class="app-layout">
+                <Sidebar/>
+                <main id="main-content" class="main-content">
+                    <div class="content-frame">
+                        <Routes fallback=|| view! { <NotFoundPage/> }.into_view()>
+                            <Route path=path!("") view=HomePage/>
+                            <Route path=path!("/settings") view=SettingsPage/>
+                            <Route path=path!("/frequency/:frequency_id") view=FrequencyPage/>
+                            <Route path=path!("/user/:username") view=UserPage/>
+                        </Routes>
                     </div>
-                    <Toast/>
-                </Router>
-            </body>
-        </html>
+                </main>
+            </div>
+            <Toast/>
+        </Router>
     }
 }
 
