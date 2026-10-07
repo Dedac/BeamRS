@@ -9,7 +9,7 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use leptos::{get_configuration, LeptosOptions};
+use leptos::config::{get_configuration, LeptosOptions};
 use leptos_axum::{generate_route_list, LeptosRoutes};
 use serde::Serialize;
 use tower::ServiceExt;
@@ -18,7 +18,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use urlencoding::decode;
 
 use crate::{
-    app::App,
+    app::{App, Shell},
     config::Settings,
     domain::{
         Frequency, FrequencyInput, PrismInput, PrismResult, Ray, RayInput, User, UsernameInput,
@@ -52,7 +52,7 @@ pub async fn run() -> Result<()> {
     let state = AppState {
         repo: Arc::new(BeamRepository::new(pool)),
         leptos_options: {
-            let mut options = get_configuration(None).await?.leptos_options;
+            let mut options = get_configuration(None)?.leptos_options;
             options.site_addr = format!("{}:{}", settings.host, settings.port).parse()?;
             options
         },
@@ -67,27 +67,27 @@ pub async fn run() -> Result<()> {
 
 pub fn router(state: AppState) -> Router {
     let routes = generate_route_list(App);
-    Router::new()
+    let app = Router::new()
         .route("/health", get(health_check))
         .route(
             "/api/frequencies",
             get(list_frequencies).post(create_frequency),
         )
         .route(
-            "/api/frequencies/:frequency_id/rays",
+            "/api/frequencies/{frequency_id}/rays",
             get(list_rays_by_frequency),
         )
         .route("/api/users", post(get_or_create_user))
-        .route("/api/users/:user_id", patch(update_user_name))
-        .route("/api/users/:username/rays", get(list_rays_by_user))
+        .route("/api/users/{user_id}", patch(update_user_name))
+        .route("/api/users/{username}/rays", get(list_rays_by_user))
         .route(
-            "/api/users/:username/prisms",
+            "/api/users/{username}/prisms",
             get(list_rays_prismed_by_user),
         )
         .route("/api/rays", post(create_ray))
         .route("/api/prisms", post(add_prism))
-        .route("/api/prisms/:user_id/:ray_id", delete(remove_prism))
-        .leptos_routes(&state, routes, App)
+        .route("/api/prisms/{user_id}/{ray_id}", delete(remove_prism));
+    app.leptos_routes(&state, routes, Shell)
         .fallback(file_and_error_handler)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -98,7 +98,7 @@ async fn health_check() -> StatusCode {
 }
 
 async fn file_and_error_handler(State(state): State<AppState>, request: Request<Body>) -> Response {
-    let response = ServeDir::new(&state.leptos_options.site_root)
+    let response = ServeDir::new(&*state.leptos_options.site_root)
         .precompressed_gzip()
         .precompressed_br()
         .oneshot(request)
@@ -535,10 +535,13 @@ mod tests {
     }
 
     fn test_app() -> Router {
-        let leptos_options = LeptosOptions {
-            output_name: "beamrs".to_string(),
-            ..LeptosOptions::default()
-        };
+        let leptos_options = LeptosOptions::builder()
+            .output_name("beamrs")
+            .site_root("target/site")
+            .site_pkg_dir("pkg")
+            .env("DEV")
+            .site_addr("127.0.0.1:8080".parse::<std::net::SocketAddr>().unwrap())
+            .build();
         router(AppState {
             repo: Arc::new(MemoryStore::seeded()),
             leptos_options,
@@ -571,159 +574,189 @@ mod tests {
 
     #[tokio::test]
     async fn user_creation_requires_post_and_is_idempotent() {
-        let app = test_app();
-        let get_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/users/get/Anon1")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let app = test_app();
+                let get_response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri("/api/users/get/Anon1")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
 
-        let first = json_request(
-            &app,
-            Method::POST,
-            "/api/users",
-            serde_json::json!({"username": "new_user"}),
-        )
-        .await;
-        let second = json_request(
-            &app,
-            Method::POST,
-            "/api/users",
-            serde_json::json!({"username": "new_user"}),
-        )
-        .await;
-        assert_eq!(first.0, StatusCode::OK);
-        assert_eq!(first.1, second.1);
+                let first = json_request(
+                    &app,
+                    Method::POST,
+                    "/api/users",
+                    serde_json::json!({"username": "new_user"}),
+                )
+                .await;
+                let second = json_request(
+                    &app,
+                    Method::POST,
+                    "/api/users",
+                    serde_json::json!({"username": "new_user"}),
+                )
+                .await;
+                assert_eq!(first.0, StatusCode::OK);
+                assert_eq!(first.1, second.1);
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn page_shell_bootstraps_the_rust_wasm_bundle() {
-        let response = test_app()
-            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let html = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(html.starts_with("<!DOCTYPE html>"));
-        assert!(html.contains("/pkg/beamrs.js"));
-        assert!(!html.contains("/static/app.js"));
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let response = test_app()
+                    .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                let html = String::from_utf8(bytes.to_vec()).unwrap();
+                assert!(html.starts_with("<!DOCTYPE html>"));
+                assert!(html.contains("/pkg/beamrs.js"));
+                assert!(!html.contains("/static/app.js"));
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn invalid_frequency_returns_bad_request_and_duplicate_returns_conflict() {
-        let app = test_app();
-        let invalid = json_request(
-            &app,
-            Method::POST,
-            "/api/frequencies",
-            serde_json::json!({"name": "   "}),
-        )
-        .await;
-        assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            invalid.1["error"],
-            serde_json::json!("frequency name must not be blank")
-        );
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let app = test_app();
+                let invalid = json_request(
+                    &app,
+                    Method::POST,
+                    "/api/frequencies",
+                    serde_json::json!({"name": "   "}),
+                )
+                .await;
+                assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
+                assert_eq!(
+                    invalid.1["error"],
+                    serde_json::json!("frequency name must not be blank")
+                );
 
-        let duplicate = json_request(
-            &app,
-            Method::POST,
-            "/api/frequencies",
-            serde_json::json!({"name": "general"}),
-        )
-        .await;
-        assert_eq!(duplicate.0, StatusCode::CONFLICT);
+                let duplicate = json_request(
+                    &app,
+                    Method::POST,
+                    "/api/frequencies",
+                    serde_json::json!({"name": "general"}),
+                )
+                .await;
+                assert_eq!(duplicate.0, StatusCode::CONFLICT);
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn prism_add_and_remove_are_idempotent() {
-        let app = test_app();
-        for expected_count in [1, 1] {
-            let (status, body) = json_request(
-                &app,
-                Method::POST,
-                "/api/prisms",
-                serde_json::json!({"user_id": 1, "ray_id": 1}),
-            )
-            .await;
-            assert_eq!(status, StatusCode::OK);
-            assert_eq!(body["prism_count"], expected_count);
-            assert_eq!(body["prismed"], true);
-        }
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let app = test_app();
+                for expected_count in [1, 1] {
+                    let (status, body) = json_request(
+                        &app,
+                        Method::POST,
+                        "/api/prisms",
+                        serde_json::json!({"user_id": 1, "ray_id": 1}),
+                    )
+                    .await;
+                    assert_eq!(status, StatusCode::OK);
+                    assert_eq!(body["prism_count"], expected_count);
+                    assert_eq!(body["prismed"], true);
+                }
 
-        for expected_count in [0, 0] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(Method::DELETE)
-                        .uri("/api/prisms/1/1")
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            let status = response.status();
-            let bytes = response.into_body().collect().await.unwrap().to_bytes();
-            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(status, StatusCode::OK);
-            assert_eq!(body["prism_count"], expected_count);
-            assert_eq!(body["prismed"], false);
-        }
+                for expected_count in [0, 0] {
+                    let response = app
+                        .clone()
+                        .oneshot(
+                            Request::builder()
+                                .method(Method::DELETE)
+                                .uri("/api/prisms/1/1")
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    let status = response.status();
+                    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(status, StatusCode::OK);
+                    assert_eq!(body["prism_count"], expected_count);
+                    assert_eq!(body["prismed"], false);
+                }
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn core_user_flow_creates_and_lists_a_ray() {
-        let app = test_app();
-        let created = json_request(
-            &app,
-            Method::POST,
-            "/api/rays",
-            serde_json::json!({
-                "frequency_id": 1,
-                "user_id": 1,
-                "text": "  A new wavelength  "
-            }),
-        )
-        .await;
-        assert_eq!(created.0, StatusCode::CREATED);
-        assert_eq!(created.1["text"], "A new wavelength");
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let app = test_app();
+                let created = json_request(
+                    &app,
+                    Method::POST,
+                    "/api/rays",
+                    serde_json::json!({
+                        "frequency_id": 1,
+                        "user_id": 1,
+                        "text": "  A new wavelength  "
+                    }),
+                )
+                .await;
+                assert_eq!(created.0, StatusCode::CREATED);
+                assert_eq!(created.1["text"], "A new wavelength");
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/frequencies/1/rays")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let rays: Vec<Ray> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rays.len(), 2);
-        assert_eq!(rays[0].text, "A new wavelength");
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .uri("/api/frequencies/1/rays")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                let rays: Vec<Ray> = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(rays.len(), 2);
+                assert_eq!(rays[0].text, "A new wavelength");
+            })
+            .await;
     }
 
     #[tokio::test]
     async fn malformed_json_uses_the_api_error_shape() {
-        let app = test_app();
-        let (status, body) = json_request(
-            &app,
-            Method::POST,
-            "/api/rays",
-            serde_json::json!({"frequency_id": 1, "text": "missing user"}),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(body["error"]
-            .as_str()
-            .is_some_and(|message| message.contains("missing field `user_id`")));
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let app = test_app();
+                let (status, body) = json_request(
+                    &app,
+                    Method::POST,
+                    "/api/rays",
+                    serde_json::json!({"frequency_id": 1, "text": "missing user"}),
+                )
+                .await;
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+                assert!(body["error"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("missing field `user_id`")));
+            })
+            .await;
     }
 }
