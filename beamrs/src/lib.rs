@@ -7,6 +7,8 @@ pub mod domain;
 #[cfg(feature = "ssr")]
 pub mod config;
 #[cfg(feature = "ssr")]
+pub mod loadtest;
+#[cfg(feature = "ssr")]
 pub mod repository;
 #[cfg(feature = "ssr")]
 pub mod server;
