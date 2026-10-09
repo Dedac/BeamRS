@@ -1,15 +1,22 @@
-//! In-process load testing for the BeamRS application router.
+//! Load testing for the BeamRS application router.
 //!
-//! The engine drives an [`axum::Router`] directly through
-//! [`tower::ServiceExt::oneshot`] instead of opening sockets. That exercises
-//! the real extractors, handlers, error mapping, and [`BeamStore`] calls while
-//! excluding kernel networking, TLS, and HTTP wire parsing, so the reported
-//! latency is application latency rather than end-to-end client latency.
+//! Two transports are supported:
+//!
+//! - [`Transport::InProcess`] drives an [`axum::Router`] directly through
+//!   [`tower::ServiceExt::oneshot`] without opening sockets. That exercises the
+//!   real extractors, handlers, error mapping, and [`BeamStore`] calls while
+//!   excluding kernel networking and HTTP wire parsing, so the reported latency
+//!   is application latency.
+//! - [`Transport::Http`] sends HTTP/1.1 requests over TCP with a pooled
+//!   keep-alive client to an [`HttpTarget`], either a running server or a
+//!   router served on loopback by [`serve_loopback`]. The reported latency then
+//!   includes connection handling, HTTP parsing, and server middleware.
 //!
 //! [`BeamStore`]: crate::repository::BeamStore
 
 use std::{
     collections::BTreeMap,
+    net::{Ipv4Addr, SocketAddr},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -19,12 +26,16 @@ use std::{
 
 use axum::{
     body::{to_bytes, Body},
-    http::{header::CONTENT_TYPE, Method, Request},
+    http::{header::CONTENT_TYPE, uri::Uri, Method, Request},
     Router,
+};
+use hyper_util::{
+    client::legacy::{connect::HttpConnector, Client},
+    rt::TokioExecutor,
 };
 use serde::Serialize;
 use thiserror::Error;
-use tokio::task::JoinSet;
+use tokio::{net::TcpListener, task::JoinSet};
 use tower::ServiceExt;
 
 /// Responses at or above this status are counted as failures.
@@ -44,6 +55,151 @@ pub enum LoadTestError {
     InvalidRequest { name: String, reason: String },
     #[error("a load worker failed: {0}")]
     Worker(String),
+    #[error("target '{url}' is not valid: {reason}")]
+    InvalidTarget { url: String, reason: String },
+}
+
+/// Base URL of an HTTP server to load, such as `http://127.0.0.1:8080`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpTarget {
+    base_url: String,
+}
+
+impl HttpTarget {
+    /// Accept an `http://host[:port]` URL with no path, query, or fragment.
+    /// HTTPS is rejected because the client has no TLS connector.
+    pub fn parse(url: &str) -> Result<Self, LoadTestError> {
+        let invalid = |reason: &str| LoadTestError::InvalidTarget {
+            url: url.to_string(),
+            reason: reason.to_string(),
+        };
+        let uri: Uri = url
+            .parse()
+            .map_err(|_| invalid("expected a URL like http://127.0.0.1:8080"))?;
+        match uri.scheme_str() {
+            Some("http") => {}
+            Some("https") => return Err(invalid("https is not supported; use http")),
+            _ => return Err(invalid("the URL must start with http://")),
+        }
+        let authority = uri
+            .authority()
+            .ok_or_else(|| invalid("the URL must include a host"))?;
+        if !matches!(uri.path(), "" | "/") || uri.query().is_some() || url.contains('#') {
+            return Err(invalid(
+                "the URL must not include a path, query, or fragment",
+            ));
+        }
+        Ok(Self {
+            base_url: format!("http://{authority}"),
+        })
+    }
+
+    pub fn from_addr(addr: SocketAddr) -> Self {
+        Self {
+            base_url: format!("http://{addr}"),
+        }
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+/// How requests reach the application.
+#[derive(Clone, Debug)]
+pub enum Transport {
+    InProcess(Router),
+    Http(HttpTarget),
+}
+
+impl Transport {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::InProcess(_) => "in-process",
+            Self::Http(_) => "http",
+        }
+    }
+
+    fn uri_prefix(&self) -> &str {
+        match self {
+            Self::InProcess(_) => "",
+            Self::Http(target) => target.base_url(),
+        }
+    }
+}
+
+/// Serve `router` on an ephemeral loopback port so it can be loaded over HTTP.
+///
+/// The server runs until the returned task is aborted.
+pub async fn serve_loopback(
+    router: Router,
+) -> std::io::Result<(HttpTarget, tokio::task::JoinHandle<()>)> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let addr = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, router).await {
+            eprintln!("loopback server stopped: {error}");
+        }
+    });
+    Ok((HttpTarget::from_addr(addr), server))
+}
+
+/// A per-run sender shared by all workers.
+#[derive(Clone)]
+enum Sender {
+    Router(Router),
+    Http(Client<HttpConnector, Body>),
+}
+
+struct Outcome {
+    status: Option<u16>,
+    body_read_error: bool,
+    transport_error: bool,
+}
+
+impl Sender {
+    fn new(transport: &Transport, concurrency: usize) -> Self {
+        match transport {
+            Transport::InProcess(router) => Self::Router(router.clone()),
+            Transport::Http(_) => {
+                let mut connector = HttpConnector::new();
+                connector.set_nodelay(true);
+                Self::Http(
+                    Client::builder(TokioExecutor::new())
+                        .pool_max_idle_per_host(concurrency)
+                        .build(connector),
+                )
+            }
+        }
+    }
+
+    async fn send(&self, request: Request<Body>) -> Outcome {
+        let response = match self {
+            Self::Router(router) => router.clone().oneshot(request).await.ok(),
+            Self::Http(client) => client
+                .request(request)
+                .await
+                .ok()
+                .map(|response| response.map(Body::new)),
+        };
+        match response {
+            Some(response) => {
+                let status = response.status().as_u16();
+                // Drain the body so the measurement covers the full response.
+                let body_read_error = to_bytes(response.into_body(), usize::MAX).await.is_err();
+                Outcome {
+                    status: Some(status),
+                    body_read_error,
+                    transport_error: false,
+                }
+            }
+            None => Outcome {
+                status: None,
+                body_read_error: false,
+                transport_error: true,
+            },
+        }
+    }
 }
 
 /// One named request in a load profile.
@@ -83,10 +239,10 @@ impl RequestSpec {
         self
     }
 
-    fn build(&self) -> Result<Request<Body>, LoadTestError> {
+    fn build(&self, uri_prefix: &str) -> Result<Request<Body>, LoadTestError> {
         let builder = Request::builder()
             .method(self.method.clone())
-            .uri(&self.path);
+            .uri(format!("{uri_prefix}{}", self.path));
         let request = match &self.body {
             Some(body) => builder
                 .header(CONTENT_TYPE, "application/json")
@@ -132,7 +288,7 @@ impl LoadProfile {
             return Err(LoadTestError::ZeroWeightMix);
         }
         for spec in &self.requests {
-            spec.build()?;
+            spec.build("")?;
         }
         Ok(())
     }
@@ -158,6 +314,7 @@ struct Sample {
     name: String,
     status: Option<u16>,
     body_read_error: bool,
+    transport_error: bool,
     latency: Duration,
 }
 
@@ -221,6 +378,7 @@ fn percentile(sorted_millis: &[f64], percent: f64) -> f64 {
 /// Aggregated result of one load run.
 #[derive(Clone, Debug, Serialize)]
 pub struct LoadReport {
+    pub transport: String,
     pub concurrency: usize,
     pub elapsed_ms: f64,
     pub total_requests: usize,
@@ -233,7 +391,12 @@ pub struct LoadReport {
 }
 
 impl LoadReport {
-    fn from_samples(concurrency: usize, elapsed: Duration, samples: Vec<Sample>) -> Self {
+    fn from_samples(
+        transport: &str,
+        concurrency: usize,
+        elapsed: Duration,
+        samples: Vec<Sample>,
+    ) -> Self {
         let borrowed: Vec<&Sample> = samples.iter().collect();
         let overall = LatencyStats::from_samples(&borrowed);
 
@@ -241,6 +404,7 @@ impl LoadReport {
         for sample in &samples {
             let key = match sample.status {
                 Some(status) => status.to_string(),
+                None if sample.transport_error => "transport-error".to_string(),
                 None => "request-build-error".to_string(),
             };
             *status_counts.entry(key).or_default() += 1;
@@ -258,6 +422,7 @@ impl LoadReport {
         let elapsed_secs = elapsed.as_secs_f64();
         let total_requests = samples.len();
         Self {
+            transport: transport.to_string(),
             concurrency,
             elapsed_ms: elapsed_secs * 1000.0,
             total_requests,
@@ -279,7 +444,8 @@ impl LoadReport {
         let mut out = String::new();
         out.push_str("BeamRS load test\n");
         out.push_str(&format!(
-            "  concurrency      {}\n  requests         {}\n  elapsed          {:.1} ms\n  throughput       {:.1} req/s\n  successes        {}\n  failures         {}\n",
+            "  transport        {}\n  concurrency      {}\n  requests         {}\n  elapsed          {:.1} ms\n  throughput       {:.1} req/s\n  successes        {}\n  failures         {}\n",
+            self.transport,
             self.concurrency,
             self.total_requests,
             self.elapsed_ms,
@@ -324,26 +490,44 @@ impl LoadReport {
     }
 }
 
-/// Drive `router` with `profile` and aggregate the results.
+/// Drive `router` in-process with `profile` and aggregate the results.
 ///
-/// Each of `profile.concurrency` workers claims request slots from a shared
-/// counter until `profile.total_requests` is exhausted, so exactly that many
-/// requests are sent regardless of how unevenly they complete.
+/// Equivalent to [`run_load_test_with`] using [`Transport::InProcess`].
 pub async fn run_load_test(
     router: Router,
     profile: &LoadProfile,
 ) -> Result<LoadReport, LoadTestError> {
+    run_load_test_with(&Transport::InProcess(router), profile).await
+}
+
+/// Drive `transport` with `profile` and aggregate the results.
+///
+/// Each of `profile.concurrency` workers claims request slots from a shared
+/// counter until `profile.total_requests` is exhausted, so exactly that many
+/// requests are sent regardless of how unevenly they complete. Requests that
+/// cannot be delivered (for example, connection refused) count as failures
+/// under the `transport-error` status key.
+pub async fn run_load_test_with(
+    transport: &Transport,
+    profile: &LoadProfile,
+) -> Result<LoadReport, LoadTestError> {
     profile.validate()?;
+    let uri_prefix: Arc<str> = Arc::from(transport.uri_prefix());
+    for spec in &profile.requests {
+        spec.build(&uri_prefix)?;
+    }
 
     let schedule = Arc::new(profile.schedule(profile.total_requests));
     let specs = Arc::new(profile.requests.clone());
     let cursor = Arc::new(AtomicUsize::new(0));
     let total_requests = profile.total_requests;
+    let sender = Sender::new(transport, profile.concurrency);
 
     let started = Instant::now();
     let mut workers = JoinSet::new();
     for _ in 0..profile.concurrency {
-        let router = router.clone();
+        let sender = sender.clone();
+        let uri_prefix = Arc::clone(&uri_prefix);
         let schedule = Arc::clone(&schedule);
         let specs = Arc::clone(&specs);
         let cursor = Arc::clone(&cursor);
@@ -355,33 +539,26 @@ pub async fn run_load_test(
                     break;
                 }
                 let spec = &specs[schedule[slot % schedule.len()]];
-                let request = match spec.build() {
+                let request = match spec.build(&uri_prefix) {
                     Ok(request) => request,
                     Err(_) => {
                         samples.push(Sample {
                             name: spec.name.clone(),
                             status: None,
                             body_read_error: false,
+                            transport_error: false,
                             latency: Duration::ZERO,
                         });
                         continue;
                     }
                 };
                 let call_started = Instant::now();
-                let (status, body_read_error) = match router.clone().oneshot(request).await {
-                    Ok(response) => {
-                        let status = response.status().as_u16();
-                        // Drain the body so the measurement covers the full response.
-                        let body_read_error =
-                            to_bytes(response.into_body(), usize::MAX).await.is_err();
-                        (Some(status), body_read_error)
-                    }
-                    Err(_) => (None, false),
-                };
+                let outcome = sender.send(request).await;
                 samples.push(Sample {
                     name: spec.name.clone(),
-                    status,
-                    body_read_error,
+                    status: outcome.status,
+                    body_read_error: outcome.body_read_error,
+                    transport_error: outcome.transport_error,
                     latency: call_started.elapsed(),
                 });
             }
@@ -403,6 +580,7 @@ pub async fn run_load_test(
     let elapsed = started.elapsed();
 
     Ok(LoadReport::from_samples(
+        transport.label(),
         profile.concurrency,
         elapsed,
         samples,
@@ -708,5 +886,101 @@ mod tests {
         assert!(text.contains("throughput"));
         assert!(text.contains("(all)"));
         assert!(text.contains("ok"));
+    }
+
+    #[tokio::test]
+    async fn http_transport_round_trips_through_a_loopback_server() {
+        let (target, server) = serve_loopback(test_router()).await.unwrap();
+        let profile = LoadProfile::new(
+            4,
+            20,
+            vec![
+                RequestSpec::get("ok", "/ok").with_weight(1),
+                RequestSpec::get("missing", "/missing").with_weight(1),
+            ],
+        );
+        let report = run_load_test_with(&Transport::Http(target), &profile)
+            .await
+            .unwrap();
+        server.abort();
+
+        assert_eq!(report.transport, "http");
+        assert_eq!(report.total_requests, 20);
+        assert_eq!(report.status_counts.get("200"), Some(&10));
+        assert_eq!(report.status_counts.get("404"), Some(&10));
+        assert_eq!(report.failures, 10);
+    }
+
+    #[tokio::test]
+    async fn http_transport_sends_json_bodies() {
+        let (target, server) = serve_loopback(test_router()).await.unwrap();
+        let profile = LoadProfile::new(
+            2,
+            4,
+            vec![RequestSpec::post_json("echo", "/echo", "{\"a\":1}")],
+        );
+        let report = run_load_test_with(&Transport::Http(target), &profile)
+            .await
+            .unwrap();
+        server.abort();
+
+        assert_eq!(report.failures, 0);
+        assert_eq!(report.status_counts.get("200"), Some(&4));
+    }
+
+    #[tokio::test]
+    async fn unreachable_http_targets_count_as_transport_failures() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let profile = LoadProfile::new(2, 6, vec![RequestSpec::get("ok", "/ok")]);
+        let report = run_load_test_with(&Transport::Http(HttpTarget::from_addr(addr)), &profile)
+            .await
+            .unwrap();
+
+        assert_eq!(report.total_requests, 6);
+        assert_eq!(report.failures, 6);
+        assert_eq!(report.status_counts.get("transport-error"), Some(&6));
+    }
+
+    #[test]
+    fn http_targets_are_validated() {
+        assert_eq!(
+            HttpTarget::parse("http://127.0.0.1:8080")
+                .unwrap()
+                .base_url(),
+            "http://127.0.0.1:8080"
+        );
+        assert_eq!(
+            HttpTarget::parse("http://localhost:3000/")
+                .unwrap()
+                .base_url(),
+            "http://localhost:3000"
+        );
+        for invalid in [
+            "https://localhost:3000",
+            "localhost:3000",
+            "http://localhost:3000/api",
+            "http://localhost:3000?x=1",
+            "not a url",
+        ] {
+            assert!(
+                matches!(
+                    HttpTarget::parse(invalid),
+                    Err(LoadTestError::InvalidTarget { .. })
+                ),
+                "{invalid} should be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn in_process_reports_are_labelled() {
+        let profile = LoadProfile::new(1, 1, vec![RequestSpec::get("ok", "/ok")]);
+        let report = run_load_test(test_router(), &profile).await.unwrap();
+
+        assert_eq!(report.transport, "in-process");
+        assert!(report.render_text().contains("transport        in-process"));
     }
 }
