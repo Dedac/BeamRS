@@ -208,6 +208,7 @@ dependencies = [
  "axum",
  "console_error_panic_hook",
  "dotenvy",
+ "futures-util",
  "gloo-net",
  "http-body-util",
  "js-sys",
