@@ -14,15 +14,18 @@ outcome was missing; it does not retroactively complete or approve that stage.
 The goals, approved design, plan, implementation, and existing
 `test-review.md` were compared at a high level. The added HTTP transports appear
 consistent with the recorded scope. No upstream artifact was changed as part
-of this follow-up, and no formal Replan decision was made during the original
-work.
+of the initial retrospective assessment, and no formal Replan decision was
+made during the original work. The later timeout fix amended goals, design,
+plan, and task acceptance records after the user selected the 30-second
+default; it did not retroactively perform the skipped Replan stage.
 
 ## Unresolved review finding
 
 Copilot's review also identified that HTTP requests and response-body reads
-have no configurable deadline. That finding remains open; this retrospective
-assessment does not claim it was resolved, deferred through a Replan gate, or
-waived.
+had no configurable deadline at the time this assessment was written. A later
+user-directed follow-up adds that deadline and records its tests in
+`test-review.md`. That implementation update does not retroactively perform
+the Replan stage or change the historical status documented here.
 
 ## Record timing
 

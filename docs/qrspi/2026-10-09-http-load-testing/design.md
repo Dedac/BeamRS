@@ -28,6 +28,10 @@ wrapper around it, so library callers are unaffected.
   appears in both the text and JSON output.
 - Undeliverable requests are recorded with `transport_error = true`, counted
   as failures, and keyed `transport-error`.
+- `HttpTarget` carries a request deadline, defaulting to 30 seconds. Its
+  configurable timeout wraps both waiting for response headers and draining
+  the complete response body. Expiration is recorded as a `transport-error`.
+  In-process transport remains without this HTTP-specific deadline.
 
 ## CLI
 
@@ -35,6 +39,10 @@ wrapper around it, so library callers are unaffected.
 - `--target URL` implies `http` and skips the database connection.
 - Combining `--target` with an explicit `--transport in-process` is a usage
   error.
+- `--http-timeout SEC` configures the whole-request deadline for HTTP modes
+  and defaults to 30 seconds. The library can override it with
+  `HttpTarget::with_timeout`. Passing the flag without HTTP mode is rejected
+  rather than silently ignored.
 
 ## Acceptance
 
@@ -45,3 +53,7 @@ wrapper around it, so library callers are unaffected.
   label is asserted.
 - G4: a test against a closed port reports every request as
   `transport-error`.
+- G5: slow headers and a response body that never completes both expire
+  within the configured deadline and report `transport-error`; the CLI parses
+  positive `--http-timeout` values, rejects zero, and rejects use without an
+  HTTP transport.

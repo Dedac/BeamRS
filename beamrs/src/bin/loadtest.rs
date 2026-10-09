@@ -16,6 +16,7 @@ use beamrs::{
     config::Settings,
     loadtest::{
         run_load_test_with, serve_loopback, HttpTarget, LoadProfile, RequestSpec, Transport,
+        DEFAULT_HTTP_TIMEOUT,
     },
     repository::BeamRepository,
     server::{router, AppState},
@@ -30,6 +31,8 @@ Options:
   --transport NAME    in-process | http               (default: in-process)
   --target URL        load a running server at URL over HTTP, for example
                       http://127.0.0.1:8080 (implies --transport http)
+  --http-timeout SEC  deadline for a complete HTTP request and response body
+                      (default: 30; HTTP transport only)
   --concurrency N     concurrent workers              (default: 16)
   --requests N        total requests to send          (default: 200)
   --frequency-id N    frequency used by read requests (default: 1)
@@ -84,6 +87,7 @@ struct Options {
     scenario: Scenario,
     transport: TransportKind,
     target: Option<String>,
+    http_timeout_seconds: u64,
     concurrency: usize,
     requests: usize,
     frequency_id: i32,
@@ -97,6 +101,7 @@ impl Default for Options {
             scenario: Scenario::ReadMix,
             transport: TransportKind::InProcess,
             target: None,
+            http_timeout_seconds: DEFAULT_HTTP_TIMEOUT.as_secs(),
             concurrency: 16,
             requests: 200,
             frequency_id: 1,
@@ -121,6 +126,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
 
     let mut options = Options::default();
     let mut explicit_transport = None;
+    let mut http_timeout_set = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -140,6 +146,15 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             }
             "--target" => {
                 options.target = Some(value_at(index)?);
+                index += 2;
+            }
+            "--http-timeout" => {
+                let seconds = parse_number::<u64>("--http-timeout", &value_at(index)?)?;
+                if seconds == 0 {
+                    return Err("--http-timeout must be at least 1 second".to_string());
+                }
+                options.http_timeout_seconds = seconds;
+                http_timeout_set = true;
                 index += 2;
             }
             "--concurrency" => {
@@ -170,6 +185,10 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
         (_, Some(_)) => TransportKind::Http,
         (None, None) => TransportKind::InProcess,
     };
+
+    if http_timeout_set && options.transport == TransportKind::InProcess {
+        return Err("--http-timeout requires --transport http or --target".to_string());
+    }
 
     Ok(Command::Run(Box::new(options)))
 }
@@ -217,7 +236,9 @@ async fn run(options: &Options) -> Result<ExitCode> {
     profile.validate()?;
 
     if let Some(url) = &options.target {
-        let transport = Transport::Http(HttpTarget::parse(url)?);
+        let target =
+            HttpTarget::parse(url)?.with_timeout(Duration::from_secs(options.http_timeout_seconds));
+        let transport = Transport::Http(target);
         return report(options, &transport, &profile).await;
     }
 
@@ -246,6 +267,7 @@ async fn run(options: &Options) -> Result<ExitCode> {
         TransportKind::InProcess => report(options, &Transport::InProcess(app), &profile).await,
         TransportKind::Http => {
             let (target, server) = serve_loopback(app).await?;
+            let target = target.with_timeout(Duration::from_secs(options.http_timeout_seconds));
             let result = report(options, &Transport::Http(target), &profile).await;
             server.abort();
             result
@@ -325,6 +347,8 @@ mod tests {
         let parsed = options(&[
             "--scenario",
             "write-mix",
+            "--transport",
+            "http",
             "--concurrency",
             "4",
             "--requests",
@@ -333,6 +357,8 @@ mod tests {
             "7",
             "--username",
             "Anon42",
+            "--http-timeout",
+            "45",
             "--json",
         ]);
 
@@ -341,7 +367,24 @@ mod tests {
         assert_eq!(parsed.requests, 40);
         assert_eq!(parsed.frequency_id, 7);
         assert_eq!(parsed.username, "Anon42");
+        assert_eq!(parsed.http_timeout_seconds, 45);
         assert!(parsed.json);
+    }
+
+    #[test]
+    fn http_timeout_must_be_positive() {
+        let error = parse_args(&args(&["--http-timeout", "0"])).unwrap_err();
+        assert!(error.contains("at least 1 second"));
+    }
+
+    #[test]
+    fn http_timeout_requires_an_http_transport() {
+        let error = parse_args(&args(&["--http-timeout", "5"])).unwrap_err();
+        assert!(error.contains("requires --transport http or --target"));
+        assert_eq!(
+            options(&["--transport", "http", "--http-timeout", "5"]).http_timeout_seconds,
+            5
+        );
     }
 
     #[test]

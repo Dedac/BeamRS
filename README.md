@@ -123,6 +123,7 @@ cargo run --bin loadtest -- --scenario read-mix --concurrency 8 --requests 200
 | `--scenario` | `read-mix` | `health`, `read-mix`, or `write-mix` |
 | `--transport` | `in-process` | `in-process` or `http` (see below) |
 | `--target` | none | `http://host:port` of a running server; implies `--transport http` |
+| `--http-timeout` | `30` seconds | Deadline for a complete HTTP request and response body; requires an HTTP transport |
 | `--concurrency` | `16` | Concurrent workers |
 | `--requests` | `200` | Total requests to send |
 | `--frequency-id` | `1` | Frequency used by read requests |
@@ -176,6 +177,10 @@ failures under the `transport-error` status key. All modes are closed-loop:
 each worker sends its next request as soon as the previous one completes, so
 throughput is an outcome of concurrency, not a fixed target rate. Run them
 against a disposable database, never production.
+For HTTP transports, the 30-second default deadline covers sending the request,
+waiting for response headers, and reading the complete response body. Override
+it with `--http-timeout SEC`; an expired request is reported as
+`transport-error`. The in-process transport is not subject to this HTTP timeout.
 
 The engine is also usable as a library: `beamrs::loadtest::run_load_test`
 accepts any `axum::Router` and a `LoadProfile`, and

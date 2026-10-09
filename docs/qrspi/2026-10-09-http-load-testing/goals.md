@@ -19,12 +19,18 @@ so existing commands and results stay comparable.
 G4. Report undeliverable requests (refused or reset connections) as failures
 that are distinct from HTTP error statuses.
 
+G5. Bound HTTP request execution through complete response-body reading with a
+configurable deadline, defaulting to 30 seconds; report deadline expiration as
+a `transport-error`.
+
 ## Constraints
 
 - Use crates that are already in the lockfile. Do not upgrade any existing
   dependency version.
 - No application route, schema, or UI changes.
 - Use a disposable local database only.
+- The request deadline applies only to HTTP transports; in-process behavior
+  remains unchanged.
 
 ## Non-goals
 

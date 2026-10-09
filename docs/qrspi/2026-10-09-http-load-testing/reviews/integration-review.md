@@ -42,6 +42,10 @@ The inspected implementation and documentation appear consistent on transport
 selection, database ownership, failure reporting, and measurement limitations.
 This is a limited retrospective assessment, not a completed Integrate gate.
 
-A separate open PR review finding requests a configurable timeout for HTTP
-requests and response-body reads. This integration record does not claim that
-finding is fixed; it remains a distinct implementation follow-up.
+A separate PR review finding requested a configurable timeout for HTTP
+requests and response-body reads. It was subsequently addressed in a
+user-directed implementation follow-up: HTTP calls now have a configurable
+deadline covering response acquisition and body draining. Targeted tests for
+stalled headers and bodies are recorded in `test-review.md`. This addition
+does not alter the retrospective nature of this assessment or imply a
+contemporaneous Integrate gate.

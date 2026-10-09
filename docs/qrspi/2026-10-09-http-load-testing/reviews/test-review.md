@@ -35,3 +35,21 @@ harness's own pool scales with concurrency up to 64 connections.
 
 The harness is closed-loop, so these figures are achieved throughput at a
 given concurrency, not a fixed arrival rate.
+
+## HTTP timeout review follow-up
+
+The user selected a 30-second default. HTTP request execution is bounded
+through response-header acquisition and complete response-body draining.
+Timeouts count as failures under `transport-error`; the HTTP-only CLI flag
+rejects zero and rejects use without an HTTP transport.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --all-targets --features ssr -- -D warnings` | pass |
+| `cargo test --all-targets --features ssr` | pass — 40 library tests and 15 CLI tests; 55 passed, 0 failed |
+| `./scripts/validate-qrspi.sh docs/qrspi/2026-10-09-http-load-testing` | pass |
+
+New regression coverage verifies both a server that stalls before sending
+response headers and a response body that yields data but never completes.
+Both runs expire promptly and report their request as `transport-error`.

@@ -40,6 +40,7 @@ use tower::ServiceExt;
 
 /// Responses at or above this status are counted as failures.
 const FAILURE_STATUS: u16 = 400;
+pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Error)]
 pub enum LoadTestError {
@@ -63,6 +64,7 @@ pub enum LoadTestError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpTarget {
     base_url: String,
+    timeout: Duration,
 }
 
 impl HttpTarget {
@@ -91,17 +93,29 @@ impl HttpTarget {
         }
         Ok(Self {
             base_url: format!("http://{authority}"),
+            timeout: DEFAULT_HTTP_TIMEOUT,
         })
     }
 
     pub fn from_addr(addr: SocketAddr) -> Self {
         Self {
             base_url: format!("http://{addr}"),
+            timeout: DEFAULT_HTTP_TIMEOUT,
         }
+    }
+
+    /// Set the deadline for the complete HTTP request and response body read.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.timeout
     }
 }
 
@@ -124,6 +138,13 @@ impl Transport {
         match self {
             Self::InProcess(_) => "",
             Self::Http(target) => target.base_url(),
+        }
+    }
+
+    fn request_timeout(&self) -> Option<Duration> {
+        match self {
+            Self::InProcess(_) => None,
+            Self::Http(target) => Some(target.timeout()),
         }
     }
 }
@@ -522,6 +543,7 @@ pub async fn run_load_test_with(
     let cursor = Arc::new(AtomicUsize::new(0));
     let total_requests = profile.total_requests;
     let sender = Sender::new(transport, profile.concurrency);
+    let request_timeout = transport.request_timeout();
 
     let started = Instant::now();
     let mut workers = JoinSet::new();
@@ -553,7 +575,19 @@ pub async fn run_load_test_with(
                     }
                 };
                 let call_started = Instant::now();
-                let outcome = sender.send(request).await;
+                let outcome = match request_timeout {
+                    Some(timeout) => {
+                        match tokio::time::timeout(timeout, sender.send(request)).await {
+                            Ok(outcome) => outcome,
+                            Err(_) => Outcome {
+                                status: None,
+                                body_read_error: false,
+                                transport_error: true,
+                            },
+                        }
+                    }
+                    None => sender.send(request).await,
+                };
                 samples.push(Sample {
                     name: spec.name.clone(),
                     status: outcome.status,
@@ -596,6 +630,7 @@ mod tests {
         routing::{get, post},
         Router,
     };
+    use futures_util::StreamExt;
 
     use super::*;
 
@@ -605,6 +640,32 @@ mod tests {
             .route("/missing", get(|| async { StatusCode::NOT_FOUND }))
             .route("/boom", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }))
             .route("/echo", post(|body: String| async move { body }))
+    }
+
+    fn slow_headers_router() -> Router {
+        Router::new().route(
+            "/slow-headers",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                StatusCode::OK
+            }),
+        )
+    }
+
+    fn slow_body_router() -> Router {
+        Router::new().route(
+            "/slow-body",
+            get(|| async {
+                let body = futures_util::stream::once(async {
+                    Ok::<_, std::io::Error>(Bytes::from_static(b"partial"))
+                })
+                .chain(futures_util::stream::pending());
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(Body::from_stream(body))
+                    .unwrap()
+            }),
+        )
     }
 
     fn failing_body_router() -> Router {
@@ -944,13 +1005,49 @@ mod tests {
         assert_eq!(report.status_counts.get("transport-error"), Some(&6));
     }
 
+    #[tokio::test]
+    async fn http_timeout_covers_waiting_for_response_headers() {
+        let (target, server) = serve_loopback(slow_headers_router()).await.unwrap();
+        let target = target.with_timeout(Duration::from_millis(30));
+        let profile = LoadProfile::new(1, 1, vec![RequestSpec::get("slow", "/slow-headers")]);
+
+        let report = run_load_test_with(&Transport::Http(target), &profile)
+            .await
+            .unwrap();
+        server.abort();
+
+        assert_eq!(report.failures, 1);
+        assert_eq!(report.status_counts.get("transport-error"), Some(&1));
+        assert!(report.elapsed_ms < 500.0);
+    }
+
+    #[tokio::test]
+    async fn http_timeout_covers_response_body_drain() {
+        let (target, server) = serve_loopback(slow_body_router()).await.unwrap();
+        let target = target.with_timeout(Duration::from_millis(30));
+        let profile = LoadProfile::new(1, 1, vec![RequestSpec::get("slow", "/slow-body")]);
+
+        let report = run_load_test_with(&Transport::Http(target), &profile)
+            .await
+            .unwrap();
+        server.abort();
+
+        assert_eq!(report.failures, 1);
+        assert_eq!(report.status_counts.get("transport-error"), Some(&1));
+        assert!(report.elapsed_ms < 500.0);
+    }
+
     #[test]
     fn http_targets_are_validated() {
+        let target = HttpTarget::parse("http://127.0.0.1:8080").unwrap();
+        assert_eq!(target.base_url(), "http://127.0.0.1:8080");
+        assert_eq!(target.timeout(), DEFAULT_HTTP_TIMEOUT);
         assert_eq!(
-            HttpTarget::parse("http://127.0.0.1:8080")
-                .unwrap()
-                .base_url(),
-            "http://127.0.0.1:8080"
+            target
+                .clone()
+                .with_timeout(Duration::from_secs(5))
+                .timeout(),
+            Duration::from_secs(5)
         );
         assert_eq!(
             HttpTarget::parse("http://localhost:3000/")
