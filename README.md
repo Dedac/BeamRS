@@ -108,7 +108,8 @@ an appropriate HTTP status.
 ## Load testing
 
 BeamRS ships a `loadtest` binary that drives the real Axum router under
-configurable concurrency and reports throughput and latency percentiles.
+configurable concurrency and reports throughput and latency percentiles,
+either in-process or over HTTP.
 
 ```sh
 cd beamrs
@@ -120,6 +121,9 @@ cargo run --bin loadtest -- --scenario read-mix --concurrency 8 --requests 200
 | Flag | Default | Purpose |
 |---|---|---|
 | `--scenario` | `read-mix` | `health`, `read-mix`, or `write-mix` |
+| `--transport` | `in-process` | `in-process` or `http` (see below) |
+| `--target` | none | `http://host:port` of a running server; implies `--transport http` |
+| `--http-timeout` | `30` seconds | Deadline for a complete HTTP request and response body; requires an HTTP transport |
 | `--concurrency` | `16` | Concurrent workers |
 | `--requests` | `200` | Total requests to send |
 | `--frequency-id` | `1` | Frequency used by read requests |
@@ -134,6 +138,7 @@ deterministic weighted schedule, so repeated runs send the same mix.
 
 ```text
 BeamRS load test
+  transport        in-process
   concurrency      8
   requests         200
   elapsed          122.1 ms
@@ -151,20 +156,42 @@ health                            20        0      0.01      0.01      0.02     
 A response status of 400 or above counts as a failure, and the process exits
 with status 1 when any request fails, so the harness can gate a pipeline.
 
-The generator calls the router in-process rather than over a socket. The
-reported latency is therefore handler plus database latency and excludes
-kernel networking, TLS, and HTTP wire parsing; treat it as an application
-performance signal, not as end-to-end client latency. Run it against a
-disposable database, never production.
+Transports:
+
+- `in-process` (default) calls the router without opening sockets. Latency is
+  handler plus database latency and excludes kernel networking and HTTP wire
+  parsing; treat it as an application performance signal.
+- `http` builds the same router, serves it on an ephemeral loopback port
+  inside the `loadtest` process, and sends HTTP/1.1 requests over TCP with a
+  keep-alive connection pool (one connection per worker). Latency includes
+  connection handling and HTTP parsing, but client and server share one
+  process and CPU budget.
+- `--target http://host:port` loads an already running server, for example
+  `cargo run --release --bin beamrs` in another terminal. The harness does
+  not connect to a database in this mode, and results include the full
+  server stack and database pool settings of that server.
+  HTTPS is not supported.
+
+Requests that cannot be delivered (for example, connection refused) count as
+failures under the `transport-error` status key. All modes are closed-loop:
+each worker sends its next request as soon as the previous one completes, so
+throughput is an outcome of concurrency, not a fixed target rate. Run them
+against a disposable database, never production.
+For HTTP transports, the 30-second default deadline covers sending the request,
+waiting for response headers, and reading the complete response body. Override
+it with `--http-timeout SEC`; an expired request is reported as
+`transport-error`. The in-process transport is not subject to this HTTP timeout.
 
 The engine is also usable as a library: `beamrs::loadtest::run_load_test`
-accepts any `axum::Router` and a `LoadProfile`.
+accepts any `axum::Router` and a `LoadProfile`, and
+`beamrs::loadtest::run_load_test_with` accepts a `Transport`.
 
 ## Validation
 
 ```sh
 ./scripts/validate-qrspi.sh docs/qrspi/2026-10-06-beamrs-parity
 ./scripts/validate-qrspi.sh docs/qrspi/2026-10-08-load-testing
+./scripts/validate-qrspi.sh docs/qrspi/2026-10-09-http-load-testing
 cd beamrs
 cargo fmt --all -- --check
 cargo clippy --all-targets --features ssr -- -D warnings
@@ -195,7 +222,9 @@ run, research, design, tasks, phase gates, and verification records live in
 [`docs/qrspi/2026-10-06-beamrs-parity/`](docs/qrspi/2026-10-06-beamrs-parity/).
 The Leptos 0.8.21 compatibility migration is recorded separately in
 [`docs/qrspi/2026-10-06-leptos-0-8-21/`](docs/qrspi/2026-10-06-leptos-0-8-21/),
-and the load-testing capability in
-[`docs/qrspi/2026-10-08-load-testing/`](docs/qrspi/2026-10-08-load-testing/).
+the load-testing capability in
+[`docs/qrspi/2026-10-08-load-testing/`](docs/qrspi/2026-10-08-load-testing/),
+and its HTTP transport in
+[`docs/qrspi/2026-10-09-http-load-testing/`](docs/qrspi/2026-10-09-http-load-testing/).
 
 BeamRS is inspired by Dedac/Beam and is an independent Rust implementation.

@@ -51,6 +51,8 @@ web-sys = { version = "0.3.106", features = [
     "Storage",
     "Window",
 ], optional = true }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"], optional = true }
+http-body-util = { version = "0.1", optional = true }
 
 [dev-dependencies]
 futures-util = "0.3"
@@ -72,6 +74,8 @@ ssr = [
     "dep:anyhow",
     "dep:async-trait",
     "dep:axum",
+    "dep:http-body-util",
+    "dep:hyper-util",
     "dep:dotenvy",
     "dep:leptos_axum",
     "dep:sqlx",

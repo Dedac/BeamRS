@@ -1,15 +1,23 @@
 //! Operator entry point for BeamRS load testing.
 //!
-//! Builds the real application router against PostgreSQL and drives it with a
-//! named scenario. Measurement is in-process: it covers handler and database
-//! latency, not kernel networking or HTTP wire parsing.
+//! Drives BeamRS with a named scenario over one of three paths:
+//!
+//! - `--transport in-process` (default) builds the real router against
+//!   PostgreSQL and calls it without sockets: handler and database latency only.
+//! - `--transport http` builds the same router, serves it on an ephemeral
+//!   loopback port inside this process, and sends HTTP/1.1 requests over TCP.
+//! - `--target URL` sends HTTP/1.1 requests to an already running server and
+//!   does not connect to a database itself.
 
 use std::{process::ExitCode, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use beamrs::{
     config::Settings,
-    loadtest::{run_load_test, LoadProfile, RequestSpec},
+    loadtest::{
+        run_load_test_with, serve_loopback, HttpTarget, LoadProfile, RequestSpec, Transport,
+        DEFAULT_HTTP_TIMEOUT,
+    },
     repository::BeamRepository,
     server::{router, AppState},
 };
@@ -20,6 +28,11 @@ Usage: loadtest [options]
 
 Options:
   --scenario NAME     health | read-mix | write-mix   (default: read-mix)
+  --transport NAME    in-process | http               (default: in-process)
+  --target URL        load a running server at URL over HTTP, for example
+                      http://127.0.0.1:8080 (implies --transport http)
+  --http-timeout SEC  deadline for a complete HTTP request and response body
+                      (default: 30; HTTP transport only)
   --concurrency N     concurrent workers              (default: 16)
   --requests N        total requests to send          (default: 200)
   --frequency-id N    frequency used by read requests (default: 1)
@@ -27,8 +40,8 @@ Options:
   --json              print the report as JSON
   -h, --help          print this message
 
-DATABASE_URL must point at a BeamRS database. The process exits with status 1
-when any request fails.
+DATABASE_URL must point at a BeamRS database unless --target is given. The
+process exits with status 1 when any request fails.
 ";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,9 +64,30 @@ impl Scenario {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransportKind {
+    InProcess,
+    Http,
+}
+
+impl TransportKind {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "in-process" => Ok(Self::InProcess),
+            "http" => Ok(Self::Http),
+            other => Err(format!(
+                "unknown transport '{other}' (expected in-process or http)"
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Options {
     scenario: Scenario,
+    transport: TransportKind,
+    target: Option<String>,
+    http_timeout_seconds: u64,
     concurrency: usize,
     requests: usize,
     frequency_id: i32,
@@ -65,6 +99,9 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             scenario: Scenario::ReadMix,
+            transport: TransportKind::InProcess,
+            target: None,
+            http_timeout_seconds: DEFAULT_HTTP_TIMEOUT.as_secs(),
             concurrency: 16,
             requests: 200,
             frequency_id: 1,
@@ -88,6 +125,8 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
     };
 
     let mut options = Options::default();
+    let mut explicit_transport = None;
+    let mut http_timeout_set = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -99,6 +138,23 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             }
             "--scenario" => {
                 options.scenario = Scenario::parse(&value_at(index)?)?;
+                index += 2;
+            }
+            "--transport" => {
+                explicit_transport = Some(TransportKind::parse(&value_at(index)?)?);
+                index += 2;
+            }
+            "--target" => {
+                options.target = Some(value_at(index)?);
+                index += 2;
+            }
+            "--http-timeout" => {
+                let seconds = parse_number::<u64>("--http-timeout", &value_at(index)?)?;
+                if seconds == 0 {
+                    return Err("--http-timeout must be at least 1 second".to_string());
+                }
+                options.http_timeout_seconds = seconds;
+                http_timeout_set = true;
                 index += 2;
             }
             "--concurrency" => {
@@ -119,6 +175,19 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             }
             other => return Err(format!("unknown option '{other}'")),
         }
+    }
+
+    options.transport = match (explicit_transport, &options.target) {
+        (Some(TransportKind::InProcess), Some(_)) => {
+            return Err("--target cannot be combined with --transport in-process".to_string())
+        }
+        (Some(kind), None) => kind,
+        (_, Some(_)) => TransportKind::Http,
+        (None, None) => TransportKind::InProcess,
+    };
+
+    if http_timeout_set && options.transport == TransportKind::InProcess {
+        return Err("--http-timeout requires --transport http or --target".to_string());
     }
 
     Ok(Command::Run(Box::new(options)))
@@ -166,6 +235,13 @@ async fn run(options: &Options) -> Result<ExitCode> {
     let profile = build_profile(options);
     profile.validate()?;
 
+    if let Some(url) = &options.target {
+        let target =
+            HttpTarget::parse(url)?.with_timeout(Duration::from_secs(options.http_timeout_seconds));
+        let transport = Transport::Http(target);
+        return report(options, &transport, &profile).await;
+    }
+
     // This binary is not launched by cargo-leptos, which normally exports the
     // generated-asset configuration. Supply the package default so the router
     // builds with the same options the server uses.
@@ -186,7 +262,25 @@ async fn run(options: &Options) -> Result<ExitCode> {
         leptos_options: get_configuration(None)?.leptos_options,
     };
 
-    let report = run_load_test(router(state), &profile).await?;
+    let app = router(state);
+    match options.transport {
+        TransportKind::InProcess => report(options, &Transport::InProcess(app), &profile).await,
+        TransportKind::Http => {
+            let (target, server) = serve_loopback(app).await?;
+            let target = target.with_timeout(Duration::from_secs(options.http_timeout_seconds));
+            let result = report(options, &Transport::Http(target), &profile).await;
+            server.abort();
+            result
+        }
+    }
+}
+
+async fn report(
+    options: &Options,
+    transport: &Transport,
+    profile: &LoadProfile,
+) -> Result<ExitCode> {
+    let report = run_load_test_with(transport, profile).await?;
     if options.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -253,6 +347,8 @@ mod tests {
         let parsed = options(&[
             "--scenario",
             "write-mix",
+            "--transport",
+            "http",
             "--concurrency",
             "4",
             "--requests",
@@ -261,6 +357,8 @@ mod tests {
             "7",
             "--username",
             "Anon42",
+            "--http-timeout",
+            "45",
             "--json",
         ]);
 
@@ -269,7 +367,24 @@ mod tests {
         assert_eq!(parsed.requests, 40);
         assert_eq!(parsed.frequency_id, 7);
         assert_eq!(parsed.username, "Anon42");
+        assert_eq!(parsed.http_timeout_seconds, 45);
         assert!(parsed.json);
+    }
+
+    #[test]
+    fn http_timeout_must_be_positive() {
+        let error = parse_args(&args(&["--http-timeout", "0"])).unwrap_err();
+        assert!(error.contains("at least 1 second"));
+    }
+
+    #[test]
+    fn http_timeout_requires_an_http_transport() {
+        let error = parse_args(&args(&["--http-timeout", "5"])).unwrap_err();
+        assert!(error.contains("requires --transport http or --target"));
+        assert_eq!(
+            options(&["--transport", "http", "--http-timeout", "5"]).http_timeout_seconds,
+            5
+        );
     }
 
     #[test]
@@ -294,6 +409,40 @@ mod tests {
     fn non_numeric_value_is_rejected() {
         let error = parse_args(&args(&["--concurrency", "many"])).unwrap_err();
         assert!(error.contains("expects a number"));
+    }
+
+    #[test]
+    fn transport_defaults_to_in_process_and_accepts_http() {
+        assert_eq!(options(&[]).transport, TransportKind::InProcess);
+        assert_eq!(
+            options(&["--transport", "http"]).transport,
+            TransportKind::Http
+        );
+        let error = parse_args(&args(&["--transport", "carrier-pigeon"])).unwrap_err();
+        assert!(error.contains("unknown transport"));
+    }
+
+    #[test]
+    fn target_implies_http_transport() {
+        let parsed = options(&["--target", "http://127.0.0.1:8080"]);
+        assert_eq!(parsed.transport, TransportKind::Http);
+        assert_eq!(parsed.target.as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(
+            options(&["--transport", "http", "--target", "http://localhost:1"]).transport,
+            TransportKind::Http
+        );
+    }
+
+    #[test]
+    fn target_conflicts_with_in_process_transport() {
+        let error = parse_args(&args(&[
+            "--transport",
+            "in-process",
+            "--target",
+            "http://127.0.0.1:8080",
+        ]))
+        .unwrap_err();
+        assert!(error.contains("cannot be combined"));
     }
 
     #[test]
