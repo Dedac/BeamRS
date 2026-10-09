@@ -39,6 +39,21 @@ Run against `docker compose up -d db` with
 
 Every acceptance criterion in `goals.md` is met.
 
+## PR review follow-up
+
+The load-test module now has 19 tests. The added regression tests verify that
+schedule expansion stays within the requested volume even for `u32::MAX`
+weight, a failed body drain counts as a failure while preserving HTTP 200 in
+the status histogram, and workers stop after either a worker panic or run
+cancellation.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --all-targets --features ssr -- -D warnings` | pass — no warnings |
+| `cargo test --all-targets --features ssr` | pass — 33 library tests and 10 binary tests; 43 passed, 0 failed |
+| `./scripts/validate-qrspi.sh docs/qrspi/2026-10-08-load-testing` | pass |
+
 ## Known limitation
 
 Latency is measured in-process, so it excludes networking and HTTP wire

@@ -24,6 +24,7 @@ use axum::{
 };
 use serde::Serialize;
 use thiserror::Error;
+use tokio::task::JoinSet;
 use tower::ServiceExt;
 
 /// Responses at or above this status are counted as failures.
@@ -137,10 +138,14 @@ impl LoadProfile {
     }
 
     /// Expand weights into a deterministic schedule of request indices.
-    fn schedule(&self) -> Vec<usize> {
+    fn schedule(&self, max_entries: usize) -> Vec<usize> {
         let mut schedule = Vec::new();
         for (index, spec) in self.requests.iter().enumerate() {
-            for _ in 0..spec.weight {
+            let remaining = max_entries.saturating_sub(schedule.len());
+            if remaining == 0 {
+                break;
+            }
+            for _ in 0..(spec.weight as usize).min(remaining) {
                 schedule.push(index);
             }
         }
@@ -152,11 +157,15 @@ impl LoadProfile {
 struct Sample {
     name: String,
     status: Option<u16>,
+    body_read_error: bool,
     latency: Duration,
 }
 
 impl Sample {
     fn failed(&self) -> bool {
+        if self.body_read_error {
+            return true;
+        }
         match self.status {
             Some(status) => status >= FAILURE_STATUS,
             None => true,
@@ -326,19 +335,19 @@ pub async fn run_load_test(
 ) -> Result<LoadReport, LoadTestError> {
     profile.validate()?;
 
-    let schedule = Arc::new(profile.schedule());
+    let schedule = Arc::new(profile.schedule(profile.total_requests));
     let specs = Arc::new(profile.requests.clone());
     let cursor = Arc::new(AtomicUsize::new(0));
     let total_requests = profile.total_requests;
 
     let started = Instant::now();
-    let mut workers = Vec::with_capacity(profile.concurrency);
+    let mut workers = JoinSet::new();
     for _ in 0..profile.concurrency {
         let router = router.clone();
         let schedule = Arc::clone(&schedule);
         let specs = Arc::clone(&specs);
         let cursor = Arc::clone(&cursor);
-        workers.push(tokio::spawn(async move {
+        workers.spawn(async move {
             let mut samples = Vec::new();
             loop {
                 let slot = cursor.fetch_add(1, Ordering::Relaxed);
@@ -352,39 +361,44 @@ pub async fn run_load_test(
                         samples.push(Sample {
                             name: spec.name.clone(),
                             status: None,
+                            body_read_error: false,
                             latency: Duration::ZERO,
                         });
                         continue;
                     }
                 };
-
                 let call_started = Instant::now();
-                let status = match router.clone().oneshot(request).await {
+                let (status, body_read_error) = match router.clone().oneshot(request).await {
                     Ok(response) => {
                         let status = response.status().as_u16();
                         // Drain the body so the measurement covers the full response.
-                        let _ = to_bytes(response.into_body(), usize::MAX).await;
-                        Some(status)
+                        let body_read_error =
+                            to_bytes(response.into_body(), usize::MAX).await.is_err();
+                        (Some(status), body_read_error)
                     }
-                    Err(_) => None,
+                    Err(_) => (None, false),
                 };
                 samples.push(Sample {
                     name: spec.name.clone(),
                     status,
+                    body_read_error,
                     latency: call_started.elapsed(),
                 });
             }
             samples
-        }));
+        });
     }
 
     let mut samples = Vec::with_capacity(total_requests);
-    for worker in workers {
-        samples.extend(
-            worker
-                .await
-                .map_err(|error| LoadTestError::Worker(error.to_string()))?,
-        );
+    while let Some(result) = workers.join_next().await {
+        match result {
+            Ok(worker_samples) => samples.extend(worker_samples),
+            Err(error) => {
+                workers.abort_all();
+                while workers.join_next().await.is_some() {}
+                return Err(LoadTestError::Worker(error.to_string()));
+            }
+        }
     }
     let elapsed = started.elapsed();
 
@@ -398,7 +412,9 @@ pub async fn run_load_test(
 #[cfg(test)]
 mod tests {
     use axum::{
+        body::Bytes,
         http::StatusCode,
+        response::Response,
         routing::{get, post},
         Router,
     };
@@ -411,6 +427,20 @@ mod tests {
             .route("/missing", get(|| async { StatusCode::NOT_FOUND }))
             .route("/boom", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }))
             .route("/echo", post(|body: String| async move { body }))
+    }
+
+    fn failing_body_router() -> Router {
+        Router::new().route(
+            "/body-error",
+            get(|| async {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(Body::from_stream(futures_util::stream::once(async {
+                        Err::<Bytes, _>(std::io::Error::other("body read failed"))
+                    })))
+                    .unwrap()
+            }),
+        )
     }
 
     fn profile(requests: Vec<RequestSpec>) -> LoadProfile {
@@ -497,6 +527,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_body_read_errors_count_as_failures_without_losing_status() {
+        let profile = LoadProfile::new(1, 1, vec![RequestSpec::get("body-error", "/body-error")]);
+        let report = run_load_test(failing_body_router(), &profile)
+            .await
+            .unwrap();
+
+        assert_eq!(report.failures, 1);
+        assert_eq!(report.successes, 0);
+        assert_eq!(report.status_counts.get("200"), Some(&1));
+        assert_eq!(report.endpoints["body-error"].failures, 1);
+        assert_eq!(report.endpoints["body-error"].count, 1);
+    }
+
+    #[test]
+    fn schedule_expansion_is_bounded_by_the_request_volume() {
+        let profile = LoadProfile::new(
+            1,
+            3,
+            vec![RequestSpec::get("ok", "/ok").with_weight(u32::MAX)],
+        );
+
+        assert_eq!(profile.schedule(profile.total_requests), vec![0, 0, 0]);
+    }
+
+    #[tokio::test]
     async fn concurrency_above_one_sends_exactly_the_requested_volume() {
         let profile = LoadProfile::new(8, 40, vec![RequestSpec::get("ok", "/ok")]);
         let report = run_load_test(test_router(), &profile).await.unwrap();
@@ -504,6 +559,68 @@ mod tests {
         assert_eq!(report.total_requests, 40);
         assert_eq!(report.successes, 40);
         assert_eq!(report.concurrency, 8);
+    }
+
+    #[tokio::test]
+    async fn worker_panic_aborts_and_awaits_other_workers() {
+        let requests_started = Arc::new(AtomicUsize::new(0));
+        let handler_requests = Arc::clone(&requests_started);
+        let router = Router::new().route(
+            "/panic-once",
+            get(move || {
+                let requests_started = Arc::clone(&handler_requests);
+                async move {
+                    if requests_started.fetch_add(1, Ordering::SeqCst) == 0 {
+                        panic!("intentional worker panic");
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    StatusCode::OK
+                }
+            }),
+        );
+        let profile = LoadProfile::new(4, 100, vec![RequestSpec::get("panic", "/panic-once")]);
+
+        assert!(matches!(
+            run_load_test(router, &profile).await,
+            Err(LoadTestError::Worker(_))
+        ));
+        let requests_at_return = requests_started.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(requests_started.load(Ordering::SeqCst), requests_at_return);
+        assert!(requests_at_return < profile.total_requests);
+    }
+
+    #[tokio::test]
+    async fn cancelling_run_aborts_all_workers() {
+        let requests_started = Arc::new(AtomicUsize::new(0));
+        let handler_requests = Arc::clone(&requests_started);
+        let router = Router::new().route(
+            "/slow",
+            get(move || {
+                let requests_started = Arc::clone(&handler_requests);
+                async move {
+                    requests_started.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    StatusCode::OK
+                }
+            }),
+        );
+        let profile = LoadProfile::new(4, 1_000, vec![RequestSpec::get("slow", "/slow")]);
+        let run = tokio::spawn(async move { run_load_test(router, &profile).await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while requests_started.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        run.abort();
+        let _ = run.await;
+        let requests_at_cancel = requests_started.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(requests_started.load(Ordering::SeqCst), requests_at_cancel);
+        assert!(requests_at_cancel < 1_000);
     }
 
     #[test]
