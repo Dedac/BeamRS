@@ -1,5 +1,4 @@
 .DS_Store
 .worktrees/
-docs/qrspi/*/phases/
 beamrs/target/
 beamrs/.env

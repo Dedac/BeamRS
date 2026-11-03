@@ -189,9 +189,6 @@ accepts any `axum::Router` and a `LoadProfile`, and
 ## Validation
 
 ```sh
-./scripts/validate-qrspi.sh docs/qrspi/2026-10-06-beamrs-parity
-./scripts/validate-qrspi.sh docs/qrspi/2026-10-08-load-testing
-./scripts/validate-qrspi.sh docs/qrspi/2026-10-09-http-load-testing
 cd beamrs
 cargo fmt --all -- --check
 cargo clippy --all-targets --features ssr -- -D warnings
@@ -214,17 +211,5 @@ authentication and authorization layer.
 User-controlled text is validated, rendered as text, and escaped in generated
 markup. Database constraints reinforce application validation. This repository
 does not copy Beam's bundled assets or source verbatim.
-
-## QRSPI+
-
-The implementation followed the repository's QRSPI+ workflow. The approved
-run, research, design, tasks, phase gates, and verification records live in
-[`docs/qrspi/2026-10-06-beamrs-parity/`](docs/qrspi/2026-10-06-beamrs-parity/).
-The Leptos 0.8.21 compatibility migration is recorded separately in
-[`docs/qrspi/2026-10-06-leptos-0-8-21/`](docs/qrspi/2026-10-06-leptos-0-8-21/),
-the load-testing capability in
-[`docs/qrspi/2026-10-08-load-testing/`](docs/qrspi/2026-10-08-load-testing/),
-and its HTTP transport in
-[`docs/qrspi/2026-10-09-http-load-testing/`](docs/qrspi/2026-10-09-http-load-testing/).
 
 BeamRS is inspired by Dedac/Beam and is an independent Rust implementation.
