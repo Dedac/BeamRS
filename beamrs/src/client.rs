@@ -1,9 +1,9 @@
 #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::domain::{Frequency, PrismResult, Ray, User};
+use crate::domain::{FeedPage, Frequency, PrismResult, Ray, User};
 #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
-use crate::domain::{FrequencyInput, PrismInput, RayInput, UsernameInput};
+use crate::domain::{FrequencyInput, PrismInput, RayInput, UsernameInput, DEFAULT_FEED_PAGE_SIZE};
 
 #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 const STORAGE_KEY: &str = "beamrs.identity";
@@ -41,6 +41,14 @@ async fn get<T: DeserializeOwned>(path: &str) -> Result<T, String> {
         .await
         .map_err(|error| format!("network request failed: {error}"))?;
     parse_response(response).await
+}
+
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
+fn feed_path(path: String, cursor: Option<String>) -> String {
+    let cursor = cursor
+        .map(|cursor| format!("&cursor={}", js_sys::encode_uri_component(&cursor)))
+        .unwrap_or_default();
+    format!("{path}?limit={DEFAULT_FEED_PAGE_SIZE}{cursor}")
 }
 
 #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
@@ -94,40 +102,53 @@ pub async fn create_frequency(name: String) -> Result<Frequency, String> {
     }
 }
 
-pub async fn list_frequency_rays(frequency_id: i32) -> Result<Vec<Ray>, String> {
+pub async fn list_frequency_rays(
+    frequency_id: i32,
+    cursor: Option<String>,
+) -> Result<FeedPage, String> {
     #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
-    return get(&format!("/api/frequencies/{frequency_id}/rays")).await;
-    #[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
-    {
-        let _ = frequency_id;
-        unavailable().await
-    }
-}
-
-pub async fn list_authored_rays(username: &str) -> Result<Vec<Ray>, String> {
-    #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
-    return get(&format!(
-        "/api/users/{}/rays",
-        js_sys::encode_uri_component(username)
+    return get(&feed_path(
+        format!("/api/frequencies/{frequency_id}/rays"),
+        cursor,
     ))
     .await;
     #[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
     {
-        let _ = username;
+        let _ = (frequency_id, cursor);
         unavailable().await
     }
 }
 
-pub async fn list_prismed_rays(username: &str) -> Result<Vec<Ray>, String> {
+pub async fn list_authored_rays(
+    username: &str,
+    cursor: Option<String>,
+) -> Result<FeedPage, String> {
     #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
-    return get(&format!(
-        "/api/users/{}/prisms",
-        js_sys::encode_uri_component(username)
+    return get(&feed_path(
+        format!("/api/users/{}/rays", js_sys::encode_uri_component(username)),
+        cursor,
     ))
     .await;
     #[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
     {
-        let _ = username;
+        let _ = (username, cursor);
+        unavailable().await
+    }
+}
+
+pub async fn list_prismed_rays(username: &str, cursor: Option<String>) -> Result<FeedPage, String> {
+    #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
+    return get(&feed_path(
+        format!(
+            "/api/users/{}/prisms",
+            js_sys::encode_uri_component(username)
+        ),
+        cursor,
+    ))
+    .await;
+    #[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
+    {
+        let _ = (username, cursor);
         unavailable().await
     }
 }

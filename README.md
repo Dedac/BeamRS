@@ -103,7 +103,11 @@ Add `--volumes` only when you intentionally want to delete local database data.
 | `DELETE` | `/api/prisms/:user_id/:ray_id` | Remove a prism idempotently |
 
 State changes never use `GET`. JSON errors use an `{"error":"..."}` body and
-an appropriate HTTP status.
+an appropriate HTTP status. The three ray-feed routes return a paged object
+with `rays` and `next_cursor` fields. `limit` defaults to 25 and must be between
+1 and 100; pass the returned cursor as the next request's `cursor` query
+parameter. Pages preserve newest-first ordering by `created_at` and ray ID.
+`next_cursor` is `null` when the feed is exhausted.
 
 ## Load testing
 
@@ -128,6 +132,7 @@ cargo run --bin loadtest -- --scenario read-mix --concurrency 8 --requests 200
 | `--requests` | `200` | Total requests to send |
 | `--frequency-id` | `1` | Frequency used by read requests |
 | `--username` | `Anon1` | User used by profile requests |
+| `--feed-page-size` | `25` | Feed response size, from 1 to 100 |
 | `--json` | off | Print the report as JSON instead of text |
 
 Scenarios are weighted request mixes: `health` hits the health route only,
@@ -155,6 +160,8 @@ health                            20        0      0.01      0.01      0.02     
 
 A response status of 400 or above counts as a failure, and the process exits
 with status 1 when any request fails, so the harness can gate a pipeline.
+Reports include response-body byte totals and per-endpoint mean and maximum
+sizes in addition to latency and status statistics.
 
 Transports:
 
@@ -186,6 +193,22 @@ The engine is also usable as a library: `beamrs::loadtest::run_load_test`
 accepts any `axum::Router` and a `LoadProfile`, and
 `beamrs::loadtest::run_load_test_with` accepts a `Transport`.
 
+### Reproducible growth benchmark
+
+From `beamrs/`, run `./scripts/growth-benchmark.sh` to seed and measure a
+disposable PostgreSQL 16 database. The script starts a uniquely named container
+on a random loopback port with no persistent volume, applies the application
+migrations, creates a deterministic ray/user/prism dataset, warms up the
+read-mix workload, records the load report and `EXPLAIN (ANALYZE, BUFFERS)`
+plans for all three feeds, then removes only its own container. It never uses
+the database configured by the ordinary Docker Compose workflow.
+
+The default run seeds 100,000 rays and writes a Markdown report under
+`target/`. Configure `RAY_COUNT` (1–1,000,000), `FEED_PAGE_SIZE` (1–100),
+`CONCURRENCY` (1–64), `REQUESTS` (1–100,000), or `REPORT_PATH` to adjust the
+run. Docker, Docker Compose, Cargo, and `rustc` are required; `psql` is invoked
+inside the disposable PostgreSQL container.
+
 ## Validation
 
 ```sh
@@ -198,7 +221,8 @@ cargo test --all-targets
 cargo leptos build --release
 ```
 
-CI also starts the application against PostgreSQL and checks the health route.
+CI also starts the application against PostgreSQL and checks the health route,
+the paged response contract for all three feeds, and the built hydration assets.
 
 ## Security model
 

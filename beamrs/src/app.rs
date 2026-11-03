@@ -11,7 +11,7 @@ use leptos_router::{
 
 use crate::{
     client,
-    domain::{Frequency, Ray, User, MAX_RAY_TEXT_LEN},
+    domain::{FeedPage, Frequency, Ray, User, MAX_RAY_TEXT_LEN},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,6 +19,23 @@ enum IdentityState {
     Loading,
     Ready(User),
     Error(String),
+}
+
+#[derive(Clone)]
+enum FeedKind {
+    Frequency(i32),
+    Authored(String),
+    Prismed(String),
+}
+
+async fn fetch_feed_page(feed: FeedKind, cursor: Option<String>) -> Result<FeedPage, String> {
+    match feed {
+        FeedKind::Frequency(frequency_id) => {
+            client::list_frequency_rays(frequency_id, cursor).await
+        }
+        FeedKind::Authored(username) => client::list_authored_rays(&username, cursor).await,
+        FeedKind::Prismed(username) => client::list_prismed_rays(&username, cursor).await,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -330,8 +347,8 @@ fn FrequencyPage() -> impl IntoView {
                 .into_iter()
                 .find(|frequency| frequency.id == frequency_id)
                 .ok_or_else(|| format!("frequency {frequency_id} not found"))?;
-            let rays = client::list_frequency_rays(frequency_id).await?;
-            Ok::<_, String>((frequency, rays))
+            let feed = client::list_frequency_rays(frequency_id, None).await?;
+            Ok::<_, String>((frequency, feed))
         }
     });
 
@@ -339,7 +356,7 @@ fn FrequencyPage() -> impl IntoView {
         {move || match page.get() {
             None => view! { <PageLoading message="Loading frequency…"/> }.into_any(),
             Some(Err(error)) => view! { <PageError message=error/> }.into_any(),
-            Some(Ok((frequency, rays))) => {
+            Some(Ok((frequency, feed))) => {
                 view! {
                     <Title text=format!("#{} | BeamRS", frequency.name)/>
                     <section class="page-heading frequency-heading">
@@ -347,16 +364,14 @@ fn FrequencyPage() -> impl IntoView {
                             <span class="eyebrow">{format!("Frequency {}", frequency.id)}</span>
                             <h1>"#"{frequency.name.clone()}</h1>
                         </div>
-                        <p>{format!("{} rays currently traveling on this wavelength.", rays.len())}</p>
+                        <p>"Browse the latest rays on this wavelength."</p>
                     </section>
                     <RayComposer frequency=frequency.clone() on_created=move |_| page.refetch()/>
                     <section class="feed-section">
-                        <div class="section-title">
-                            <h2>"Latest rays"</h2>
-                            <span>{rays.len()}</span>
-                        </div>
-                        <RayList
-                            rays
+                        <PagedRayList
+                            title="Latest rays"
+                            feed=FeedKind::Frequency(frequency.id)
+                            initial=feed
                             empty_message="This frequency is quiet. Send the first ray."
                         />
                     </section>
@@ -443,8 +458,8 @@ fn UserPage() -> impl IntoView {
         let username = username();
         async move {
             let username = username.ok_or_else(|| "missing username".to_string())?;
-            let authored = client::list_authored_rays(&username).await?;
-            let prismed = client::list_prismed_rays(&username).await?;
+            let authored = client::list_authored_rays(&username, None).await?;
+            let prismed = client::list_prismed_rays(&username, None).await?;
             Ok::<_, String>((username, authored, prismed))
         }
     });
@@ -462,30 +477,22 @@ fn UserPage() -> impl IntoView {
                         <div>
                             <span class="eyebrow">"Beam profile"</span>
                             <h1>"@"{username.clone()}</h1>
-                            <p>{format!(
-                                "{} authored rays · {} prismed rays",
-                                authored.len(),
-                                prismed.len()
-                            )}</p>
+                            <p>"Browse the newest authored and prismed rays."</p>
                         </div>
                     </section>
                     <section class="feed-section">
-                        <div class="section-title">
-                            <h2>"Authored rays"</h2>
-                            <span>{authored.len()}</span>
-                        </div>
-                        <RayList
-                            rays=authored
+                        <PagedRayList
+                            title="Authored rays"
+                            feed=FeedKind::Authored(username.clone())
+                            initial=authored
                             empty_message="No rays transmitted by this user yet."
                         />
                     </section>
                     <section class="feed-section">
-                        <div class="section-title">
-                            <h2>"Prismed rays"</h2>
-                            <span>{prismed.len()}</span>
-                        </div>
-                        <RayList
-                            rays=prismed
+                        <PagedRayList
+                            title="Prismed rays"
+                            feed=FeedKind::Prismed(username.clone())
+                            initial=prismed
                             empty_message="No rays prismed by this user yet."
                         />
                     </section>
@@ -711,27 +718,100 @@ fn start_beam_animation(canvas: NodeRef<html::Canvas>, passes: RwSignal<u32>) {
 }
 
 #[component]
-fn RayList(rays: Vec<Ray>, empty_message: &'static str) -> impl IntoView {
-    if rays.is_empty() {
-        return view! {
-            <div class="empty-state">
-                <span aria-hidden="true">"◌"</span>
-                <p>{empty_message}</p>
-            </div>
+fn PagedRayList(
+    title: &'static str,
+    feed: FeedKind,
+    initial: FeedPage,
+    empty_message: &'static str,
+) -> impl IntoView {
+    let rays = RwSignal::new(initial.rays);
+    let cursor = RwSignal::new(initial.next_cursor);
+    let loading = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    let load_more = move |_| {
+        if loading.get_untracked() {
+            return;
         }
-        .into_any();
-    }
-
+        let Some(next_cursor) = cursor.get_untracked() else {
+            return;
+        };
+        loading.set(true);
+        error.set(None);
+        let feed = feed.clone();
+        spawn_local(async move {
+            match fetch_feed_page(feed, Some(next_cursor)).await {
+                Ok(page) => {
+                    rays.update(|current| current.extend(page.rays));
+                    cursor.set(page.next_cursor);
+                }
+                Err(message) => error.set(Some(message)),
+            }
+            loading.set(false);
+        });
+    };
     view! {
-        <div class="ray-list">
-            <For
-                each=move || rays.clone()
-                key=|ray| ray.id
-                children=move |ray| view! { <RayCard ray/> }
-            />
+        <div class="section-title">
+            <h2>{title}</h2>
+            <span>{move || rays.with(|current| current.len())}</span>
         </div>
+        <RayList rays empty_message/>
+        {move || {
+            if cursor.get().is_some() {
+                view! {
+                    <div class="feed-pagination">
+                        <button
+                            class="secondary-button"
+                            type="button"
+                            disabled=move || loading.get()
+                            on:click=load_more.clone()
+                        >
+                            {move || if loading.get() { "Loading…" } else { "Load more rays" }}
+                        </button>
+                    </div>
+                }
+                .into_any()
+            } else {
+                ().into_view().into_any()
+            }
+        }}
+        {move || {
+            error.get().map(|message| {
+                view! {
+                    <p class="form-status error" role="alert">{message}</p>
+                }
+                .into_any()
+            })
+        }}
     }
-    .into_any()
+}
+
+#[component]
+fn RayList(rays: RwSignal<Vec<Ray>>, empty_message: &'static str) -> impl IntoView {
+    view! {
+        {move || {
+            let current = rays.get();
+            if current.is_empty() {
+                view! {
+                    <div class="empty-state">
+                        <span aria-hidden="true">"◌"</span>
+                        <p>{empty_message}</p>
+                    </div>
+                }
+                .into_any()
+            } else {
+                view! {
+                    <div class="ray-list">
+                        <For
+                            each=move || current.clone()
+                            key=|ray| ray.id
+                            children=move |ray| view! { <RayCard ray/> }
+                        />
+                    </div>
+                }
+                .into_any()
+            }
+        }}
+    }
 }
 
 #[component]

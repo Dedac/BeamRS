@@ -3,8 +3,8 @@ use sqlx::{PgPool, Row};
 use thiserror::Error;
 
 use crate::domain::{
-    validate_frequency_name, validate_ray_text, validate_username, Frequency, PrismResult, Ray,
-    User,
+    validate_frequency_name, validate_ray_text, validate_username, FeedCursor, FeedPage, Frequency,
+    PrismResult, Ray, User, MAX_FEED_PAGE_SIZE,
 };
 
 #[derive(Debug, Error)]
@@ -27,9 +27,24 @@ pub trait BeamStore: Send + Sync {
     async fn create_frequency(&self, name: &str) -> RepositoryResult<Frequency>;
     async fn get_or_create_user(&self, username: &str) -> RepositoryResult<User>;
     async fn update_user_name(&self, user_id: i32, username: &str) -> RepositoryResult<User>;
-    async fn list_rays_by_frequency(&self, frequency_id: i32) -> RepositoryResult<Vec<Ray>>;
-    async fn list_rays_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>>;
-    async fn list_rays_prismed_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>>;
+    async fn list_rays_by_frequency(
+        &self,
+        frequency_id: i32,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage>;
+    async fn list_rays_by_user(
+        &self,
+        username: &str,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage>;
+    async fn list_rays_prismed_by_user(
+        &self,
+        username: &str,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage>;
     async fn create_ray(
         &self,
         frequency_id: i32,
@@ -91,12 +106,21 @@ impl BeamRepository {
         predicate: &str,
         bind_text: Option<&str>,
         bind_id: Option<i32>,
-    ) -> RepositoryResult<Vec<Ray>> {
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage> {
+        if !(1..=MAX_FEED_PAGE_SIZE).contains(&limit) {
+            return Err(RepositoryError::Validation(format!(
+                "feed limit must be between 1 and {MAX_FEED_PAGE_SIZE}"
+            )));
+        }
         let sql = format!(
             r#"
             SELECT r.id, r.text, r.frequency_id, r.user_id,
                    COALESCE(u.username, '') AS user_name,
                    COUNT(p.id)::INT AS prism_count,
+                   FLOOR(EXTRACT(EPOCH FROM r.created_at) * 1000000)::BIGINT
+                       AS cursor_created_at_micros,
                    COALESCE(
                        ARRAY_AGG(pu.username ORDER BY pu.username)
                            FILTER (WHERE pu.username IS NOT NULL),
@@ -107,14 +131,43 @@ impl BeamRepository {
             LEFT JOIN prisms p ON p.ray_id = r.id
             LEFT JOIN users pu ON pu.id = p.user_id
             WHERE {predicate}
+              AND (
+                  $2::BIGINT IS NULL
+                  OR (r.created_at, r.id) <
+                     (
+                         TIMESTAMPTZ 'epoch'
+                             + ($2::DOUBLE PRECISION * INTERVAL '1 microsecond'),
+                         $3::INTEGER
+                     )
+              )
             GROUP BY r.id, u.username
             ORDER BY r.created_at DESC, r.id DESC
+            LIMIT $4
             "#
         );
+        let cursor_micros = cursor.map(|value| value.created_at_micros);
+        let cursor_id = cursor.map(|value| value.id);
+        let limit_with_lookahead = (limit + 1) as i64;
 
         let rows = match (bind_text, bind_id) {
-            (Some(value), None) => sqlx::query(&sql).bind(value).fetch_all(&self.pool).await?,
-            (None, Some(value)) => sqlx::query(&sql).bind(value).fetch_all(&self.pool).await?,
+            (Some(value), None) => {
+                sqlx::query(&sql)
+                    .bind(value)
+                    .bind(cursor_micros)
+                    .bind(cursor_id)
+                    .bind(limit_with_lookahead)
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+            (None, Some(value)) => {
+                sqlx::query(&sql)
+                    .bind(value)
+                    .bind(cursor_micros)
+                    .bind(cursor_id)
+                    .bind(limit_with_lookahead)
+                    .fetch_all(&self.pool)
+                    .await?
+            }
             _ => {
                 return Err(RepositoryError::Database(sqlx::Error::Protocol(
                     "invalid ray query binding".into(),
@@ -122,7 +175,29 @@ impl BeamRepository {
             }
         };
 
-        rows.into_iter().map(row_to_ray).collect()
+        let has_more = rows.len() > limit;
+        let mut rows = rows;
+        if has_more {
+            rows.pop();
+        }
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|row| -> Result<String, RepositoryError> {
+                    Ok(FeedCursor {
+                        created_at_micros: row.try_get("cursor_created_at_micros")?,
+                        id: row.try_get("id")?,
+                    }
+                    .encode())
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let rays = rows
+            .into_iter()
+            .map(row_to_ray)
+            .collect::<RepositoryResult<_>>()?;
+        Ok(FeedPage { rays, next_cursor })
     }
 }
 
@@ -213,18 +288,39 @@ impl BeamStore for BeamRepository {
         })
     }
 
-    async fn list_rays_by_frequency(&self, frequency_id: i32) -> RepositoryResult<Vec<Ray>> {
-        self.list_rays_where("r.frequency_id = $1", None, Some(frequency_id))
-            .await
+    async fn list_rays_by_frequency(
+        &self,
+        frequency_id: i32,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage> {
+        self.list_rays_where(
+            "r.frequency_id = $1",
+            None,
+            Some(frequency_id),
+            limit,
+            cursor,
+        )
+        .await
     }
 
-    async fn list_rays_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>> {
+    async fn list_rays_by_user(
+        &self,
+        username: &str,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage> {
         let username = validate_username(username).map_err(RepositoryError::Validation)?;
-        self.list_rays_where("u.username = $1", Some(&username), None)
+        self.list_rays_where("u.username = $1", Some(&username), None, limit, cursor)
             .await
     }
 
-    async fn list_rays_prismed_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>> {
+    async fn list_rays_prismed_by_user(
+        &self,
+        username: &str,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage> {
         let username = validate_username(username).map_err(RepositoryError::Validation)?;
         self.list_rays_where(
             "EXISTS (
@@ -235,6 +331,8 @@ impl BeamStore for BeamRepository {
             )",
             Some(&username),
             None,
+            limit,
+            cursor,
         )
         .await
     }

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 pub const MAX_USERNAME_LEN: usize = 40;
 pub const MAX_FREQUENCY_NAME_LEN: usize = 60;
 pub const MAX_RAY_TEXT_LEN: usize = 300;
+pub const DEFAULT_FEED_PAGE_SIZE: usize = 25;
+pub const MAX_FEED_PAGE_SIZE: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct User {
@@ -25,6 +27,43 @@ pub struct Ray {
     pub user_name: String,
     pub prism_count: i32,
     pub users_prismed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeedCursor {
+    pub created_at_micros: i64,
+    pub id: i32,
+}
+
+impl FeedCursor {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let (created_at_micros, id) = value
+            .split_once(':')
+            .ok_or_else(|| "cursor must contain a timestamp and ray id".to_string())?;
+        let created_at_micros = created_at_micros
+            .parse()
+            .map_err(|_| "cursor timestamp is invalid".to_string())?;
+        let id = id
+            .parse()
+            .map_err(|_| "cursor ray id is invalid".to_string())?;
+        if id <= 0 {
+            return Err("cursor ray id must be positive".to_string());
+        }
+        Ok(Self {
+            created_at_micros,
+            id,
+        })
+    }
+
+    pub fn encode(self) -> String {
+        format!("{}:{}", self.created_at_micros, self.id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedPage {
+    pub rays: Vec<Ray>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -159,5 +198,17 @@ mod tests {
         assert!(validate_username(&"a".repeat(MAX_USERNAME_LEN + 1)).is_err());
         assert!(validate_frequency_name(&"光".repeat(MAX_FREQUENCY_NAME_LEN)).is_ok());
         assert!(validate_ray_text(&"光".repeat(MAX_RAY_TEXT_LEN)).is_ok());
+    }
+
+    #[test]
+    fn feed_cursors_round_trip_and_reject_malformed_values() {
+        let cursor = FeedCursor {
+            created_at_micros: 1_767_225_600_123_456,
+            id: 42,
+        };
+        assert_eq!(FeedCursor::parse(&cursor.encode()), Ok(cursor));
+        assert!(FeedCursor::parse("not-a-cursor").is_err());
+        assert!(FeedCursor::parse("123:0").is_err());
+        assert!(FeedCursor::parse("123:42:extra").is_err());
     }
 }

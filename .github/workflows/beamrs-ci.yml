@@ -65,9 +65,71 @@ jobs:
               curl --fail --silent http://127.0.0.1:8080/pkg/beamrs.wasm --output /tmp/beamrs.wasm
               test -s /tmp/beamrs.js
               test -s /tmp/beamrs.wasm
+              python3 - <<'PY'
+              import json
+              from urllib.parse import urlencode
+              from urllib.request import Request, urlopen
+
+              base = "http://127.0.0.1:8080"
+
+              def request(path, body=None):
+                  data = json.dumps(body).encode() if body is not None else None
+                  headers = {"Content-Type": "application/json"} if data else {}
+                  req = Request(base + path, data=data, headers=headers,
+                                method="POST" if data else "GET")
+                  with urlopen(req) as response:
+                      return response.status, json.load(response)
+
+              status, user = request("/api/users", {"username": "PaginationSmokeUser"})
+              assert status == 200
+              ray_ids = []
+              for index in range(3):
+                  status, ray = request("/api/rays", {
+                      "frequency_id": 1,
+                      "user_id": user["id"],
+                      "text": f"Pagination smoke ray {index}",
+                  })
+                  assert status == 201
+                  ray_ids.append(ray["id"])
+                  if index < 2:
+                      status, _ = request("/api/prisms", {
+                          "user_id": user["id"],
+                          "ray_id": ray["id"],
+                      })
+                      assert status == 200
+
+              feeds = [
+                  "/api/frequencies/1/rays",
+                  "/api/users/PaginationSmokeUser/rays",
+                  "/api/users/PaginationSmokeUser/prisms",
+              ]
+              for path in feeds:
+                  status, first = request(path + "?limit=1")
+                  assert status == 200
+                  assert len(first["rays"]) == 1
+                  cursor = first["next_cursor"]
+                  assert isinstance(cursor, str)
+                  status, second = request(path + "?" + urlencode({
+                      "limit": 1,
+                      "cursor": cursor,
+                  }))
+                  assert status == 200
+                  assert len(second["rays"]) == 1
+                  assert first["rays"][0]["id"] != second["rays"][0]["id"]
+              PY
               exit 0
             fi
             sleep 1
           done
           cat /tmp/beamrs.log
           exit 1
+      - name: Smoke test disposable growth benchmark
+        env:
+          RAY_COUNT: 500
+          FEED_PAGE_SIZE: 25
+          CONCURRENCY: 2
+          REQUESTS: 20
+          REPORT_PATH: target/growth-smoke.md
+        run: |
+          ./scripts/growth-benchmark.sh
+          test -s "$REPORT_PATH"
