@@ -199,15 +199,30 @@ From `beamrs/`, run `./scripts/growth-benchmark.sh` to seed and measure a
 disposable PostgreSQL 16 database. The script starts a uniquely named container
 on a random loopback port with no persistent volume, applies the application
 migrations, creates a deterministic ray/user/prism dataset, warms up the
-read-mix workload, records the load report and `EXPLAIN (ANALYZE, BUFFERS)`
-plans for all three feeds, then removes only its own container. It never uses
-the database configured by the ordinary Docker Compose workflow.
+read-mix workload, records the load report and query plans, then removes only
+its own container. It never uses the database configured by the ordinary Docker
+Compose workflow.
+
+The plans use `EXPLAIN (ANALYZE, BUFFERS)` on prepared statements that mirror
+the repository's feed query. Each feed is explained for its first page and for
+a page starting at the feed's midpoint under forced generic plans, which show
+whether the plan stays index-bounded for any parameter value. Generic plans
+cannot see the page limit, so a large feed may cross PostgreSQL's
+`jit_above_cost` and include one-time JIT compilation. A final plan records what
+PostgreSQL keeps under the default `plan_cache_mode` after six executions.
 
 The default run seeds 100,000 rays and writes a Markdown report under
 `target/`. Configure `RAY_COUNT` (1–1,000,000), `FEED_PAGE_SIZE` (1–100),
 `CONCURRENCY` (1–64), `REQUESTS` (1–100,000), or `REPORT_PATH` to adjust the
-run. Docker, Docker Compose, Cargo, and `rustc` are required; `psql` is invoked
-inside the disposable PostgreSQL container.
+run. The script will not overwrite an existing report. Docker, Docker Compose,
+Cargo, and `rustc` are required; `psql` is invoked inside the disposable
+PostgreSQL container.
+
+Frequency and authored feeds read only the requested page through their
+`(…, created_at, id)` indexes, then look up authors and prisms per returned ray.
+The prismed feed is ordered by ray creation time, so its cost still grows with
+the number of rays that user has prismed. Each returned ray also lists every
+prismer's username.
 
 ## Validation
 

@@ -137,67 +137,112 @@ load_report=$(DATABASE_URL="$database_url" cargo run --release --quiet --bin loa
     --feed-page-size "$feed_page_size" --concurrency "$concurrency" \
     --requests "$requests" --json)
 
-query_plans=$(compose exec -T db psql -X -U beamrs -d beamrs \
-    --set=ON_ERROR_STOP=1 \
-    --set=frequency_id="$frequency_id" \
-    --set=feed_page_size="$feed_page_size" <<'SQL'
-\echo 'Frequency feed'
-EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
-SELECT r.id, r.text, r.frequency_id, r.user_id,
-       COALESCE(u.username, '') AS user_name,
-       COUNT(p.id)::INT AS prism_count,
-       COALESCE(ARRAY_AGG(pu.username ORDER BY pu.username)
-           FILTER (WHERE pu.username IS NOT NULL), ARRAY[]::TEXT[]) AS users_prismed
-FROM rays r
-LEFT JOIN users u ON u.id = r.user_id
-LEFT JOIN prisms p ON p.ray_id = r.id
-LEFT JOIN users pu ON pu.id = p.user_id
-WHERE r.frequency_id = :frequency_id
-  AND (NULL::BIGINT IS NULL OR (r.created_at, r.id) < (TIMESTAMPTZ 'epoch', 0))
-GROUP BY r.id, u.username
-ORDER BY r.created_at DESC, r.id DESC
-LIMIT :feed_page_size;
-
-\echo 'Authored feed'
-EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
-SELECT r.id, r.text, r.frequency_id, r.user_id,
-       COALESCE(u.username, '') AS user_name,
-       COUNT(p.id)::INT AS prism_count,
-       COALESCE(ARRAY_AGG(pu.username ORDER BY pu.username)
-           FILTER (WHERE pu.username IS NOT NULL), ARRAY[]::TEXT[]) AS users_prismed
-FROM rays r
-LEFT JOIN users u ON u.id = r.user_id
-LEFT JOIN prisms p ON p.ray_id = r.id
-LEFT JOIN users pu ON pu.id = p.user_id
-WHERE u.username = 'GrowthUser1'
-  AND (NULL::BIGINT IS NULL OR (r.created_at, r.id) < (TIMESTAMPTZ 'epoch', 0))
-GROUP BY r.id, u.username
-ORDER BY r.created_at DESC, r.id DESC
-LIMIT :feed_page_size;
-
-\echo 'Prismed feed'
-EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
-SELECT r.id, r.text, r.frequency_id, r.user_id,
-       COALESCE(u.username, '') AS user_name,
-       COUNT(p.id)::INT AS prism_count,
-       COALESCE(ARRAY_AGG(pu.username ORDER BY pu.username)
-           FILTER (WHERE pu.username IS NOT NULL), ARRAY[]::TEXT[]) AS users_prismed
-FROM rays r
-LEFT JOIN users u ON u.id = r.user_id
-LEFT JOIN prisms p ON p.ray_id = r.id
-LEFT JOIN users pu ON pu.id = p.user_id
-WHERE EXISTS (
-    SELECT 1
-    FROM prisms selected_prism
-    JOIN users selected_user ON selected_user.id = selected_prism.user_id
-    WHERE selected_prism.ray_id = r.id
-      AND selected_user.username = 'GrowthUser1'
+# Mirrors BeamRepository::list_rays_where in src/repository.rs.
+feed_sql() {
+    predicate=$1
+    cursor_clause=$2
+    cat <<EOF
+WITH page AS (
+    SELECT r.id, r.text, r.frequency_id, r.user_id, r.created_at
+    FROM rays r
+    WHERE $predicate
+      $cursor_clause
+    ORDER BY r.created_at DESC, r.id DESC
+    LIMIT \$2
 )
-  AND (NULL::BIGINT IS NULL OR (r.created_at, r.id) < (TIMESTAMPTZ 'epoch', 0))
-GROUP BY r.id, u.username
+SELECT page.id, page.text, page.frequency_id, page.user_id,
+       COALESCE((SELECT author.username FROM users author
+                 WHERE author.id = page.user_id), '') AS user_name,
+       prism_stats.prism_count,
+       FLOOR(EXTRACT(EPOCH FROM page.created_at) * 1000000)::BIGINT
+           AS cursor_created_at_micros,
+       prism_stats.users_prismed
+FROM page
+CROSS JOIN LATERAL (
+    SELECT COUNT(*)::INT AS prism_count,
+           COALESCE(ARRAY_AGG(pu.username ORDER BY pu.username)
+               FILTER (WHERE pu.username IS NOT NULL), ARRAY[]::TEXT[]) AS users_prismed
+    FROM prisms p
+    LEFT JOIN users pu ON pu.id = p.user_id
+    WHERE p.ray_id = page.id
+) prism_stats
+ORDER BY page.created_at DESC, page.id DESC
+EOF
+}
+
+cursor_clause="AND (r.created_at, r.id) <
+          (TIMESTAMPTZ 'epoch' + (\$3::DOUBLE PRECISION * INTERVAL '1 microsecond'),
+           \$4::INTEGER)"
+
+# SQLx reuses prepared statements, so forced generic plans show whether each
+# feed stays index-bounded for any parameter values. Generic plans cannot see
+# LIMIT $2 and estimate a large page; on big feeds that can cross PostgreSQL's
+# jit_above_cost, so first-page timings may include one-time JIT compilation.
+# The deep page starts halfway down each feed.
+explain_feed() {
+    label=$1
+    name=$2
+    param_type=$3
+    param_value=$4
+    predicate=$5
+    cat <<EOF
+\\echo '$label: first page'
+PREPARE ${name}_first($param_type, BIGINT) AS
+$(feed_sql "$predicate" "");
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) EXECUTE ${name}_first($param_value, :page_limit);
+PREPARE ${name}_cursor($param_type) AS
+SELECT FLOOR(EXTRACT(EPOCH FROM r.created_at) * 1000000)::BIGINT AS cursor_micros,
+       r.id AS cursor_id
+FROM rays r
+WHERE $predicate
 ORDER BY r.created_at DESC, r.id DESC
-LIMIT :feed_page_size;
-SQL
+OFFSET (SELECT COUNT(*) / 2 FROM rays r WHERE $predicate)
+LIMIT 1;
+EXECUTE ${name}_cursor($param_value) \\gset
+\\echo '$label: page starting at the feed midpoint'
+PREPARE ${name}_deep($param_type, BIGINT, BIGINT, INTEGER) AS
+$(feed_sql "$predicate" "$cursor_clause");
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+EXECUTE ${name}_deep($param_value, :page_limit, :cursor_micros, :cursor_id);
+EOF
+}
+
+query_plans=$(
+    {
+        printf '%s\n' 'SET plan_cache_mode = force_generic_plan;'
+        explain_feed 'Frequency feed' frequency_feed INTEGER :frequency_id \
+            'r.frequency_id = $1'
+        explain_feed 'Authored feed' authored_feed TEXT "'GrowthUser1'" \
+            'r.user_id = (SELECT id FROM users WHERE username = $1)'
+        explain_feed 'Prismed feed' prismed_feed TEXT "'GrowthUser1'" \
+            'EXISTS (
+                SELECT 1
+                FROM prisms selected_prism
+                JOIN users selected_user ON selected_user.id = selected_prism.user_id
+                WHERE selected_prism.ray_id = r.id AND selected_user.username = $1
+            )'
+        # PostgreSQL chooses between custom and generic plans after five
+        # executions; record the plan it actually keeps by default.
+        cat <<EOF
+SET plan_cache_mode = auto;
+\\echo 'Frequency feed: first page under default plan_cache_mode after 6 executions'
+PREPARE frequency_feed_auto(INTEGER, BIGINT) AS
+$(feed_sql 'r.frequency_id = $1' "");
+\\o /dev/null
+EXECUTE frequency_feed_auto(:frequency_id, :page_limit);
+EXECUTE frequency_feed_auto(:frequency_id, :page_limit);
+EXECUTE frequency_feed_auto(:frequency_id, :page_limit);
+EXECUTE frequency_feed_auto(:frequency_id, :page_limit);
+EXECUTE frequency_feed_auto(:frequency_id, :page_limit);
+EXECUTE frequency_feed_auto(:frequency_id, :page_limit);
+\\o
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+EXECUTE frequency_feed_auto(:frequency_id, :page_limit);
+EOF
+    } | compose exec -T db psql -X -U beamrs -d beamrs \
+        --set=ON_ERROR_STOP=1 \
+        --set=frequency_id="$frequency_id" \
+        --set=page_limit="$((feed_page_size + 1))"
 )
 
 working_tree_state=clean
