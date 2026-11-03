@@ -3,7 +3,10 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Result;
 use axum::{
     body::Body,
-    extract::{rejection::JsonRejection, FromRef, Path, State},
+    extract::{
+        rejection::{JsonRejection, QueryRejection},
+        FromRef, Path, Query, State,
+    },
     http::{Request, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{delete, get, patch, post},
@@ -11,7 +14,7 @@ use axum::{
 };
 use leptos::config::{get_configuration, LeptosOptions};
 use leptos_axum::{generate_route_list, LeptosRoutes};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tower::ServiceExt;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -21,7 +24,8 @@ use crate::{
     app::{shell, App},
     config::Settings,
     domain::{
-        Frequency, FrequencyInput, PrismInput, PrismResult, Ray, RayInput, User, UsernameInput,
+        FeedCursor, FeedPage, Frequency, FrequencyInput, PrismInput, PrismResult, Ray, RayInput,
+        User, UsernameInput, DEFAULT_FEED_PAGE_SIZE, MAX_FEED_PAGE_SIZE,
     },
     repository::{BeamRepository, BeamStore, RepositoryError},
 };
@@ -133,8 +137,15 @@ async fn create_frequency(
 async fn list_rays_by_frequency(
     Path(frequency_id): Path<i32>,
     State(state): State<AppState>,
-) -> Result<Json<Vec<Ray>>, AppError> {
-    Ok(Json(state.repo.list_rays_by_frequency(frequency_id).await?))
+    query: Result<Query<FeedQuery>, QueryRejection>,
+) -> Result<Json<FeedPage>, AppError> {
+    let (limit, cursor) = parse_feed_query(query)?;
+    Ok(Json(
+        state
+            .repo
+            .list_rays_by_frequency(frequency_id, limit, cursor)
+            .await?,
+    ))
 }
 
 async fn get_or_create_user(
@@ -196,17 +207,55 @@ async fn remove_prism(
 async fn list_rays_by_user(
     Path(username): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<Vec<Ray>>, AppError> {
+    query: Result<Query<FeedQuery>, QueryRejection>,
+) -> Result<Json<FeedPage>, AppError> {
     let username = decode_path(&username)?;
-    Ok(Json(state.repo.list_rays_by_user(&username).await?))
+    let (limit, cursor) = parse_feed_query(query)?;
+    Ok(Json(
+        state
+            .repo
+            .list_rays_by_user(&username, limit, cursor)
+            .await?,
+    ))
 }
 
 async fn list_rays_prismed_by_user(
     Path(username): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<Vec<Ray>>, AppError> {
+    query: Result<Query<FeedQuery>, QueryRejection>,
+) -> Result<Json<FeedPage>, AppError> {
     let username = decode_path(&username)?;
-    Ok(Json(state.repo.list_rays_prismed_by_user(&username).await?))
+    let (limit, cursor) = parse_feed_query(query)?;
+    Ok(Json(
+        state
+            .repo
+            .list_rays_prismed_by_user(&username, limit, cursor)
+            .await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct FeedQuery {
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+fn parse_feed_query(
+    query: Result<Query<FeedQuery>, QueryRejection>,
+) -> Result<(usize, Option<FeedCursor>), AppError> {
+    let Query(query) = query.map_err(|error| AppError::bad_request(error.body_text()))?;
+    let limit = query.limit.unwrap_or(DEFAULT_FEED_PAGE_SIZE);
+    if !(1..=MAX_FEED_PAGE_SIZE).contains(&limit) {
+        return Err(AppError::bad_request(format!(
+            "feed limit must be between 1 and {MAX_FEED_PAGE_SIZE}"
+        )));
+    }
+    let cursor = query
+        .cursor
+        .map(|value| FeedCursor::parse(&value))
+        .transpose()
+        .map_err(AppError::bad_request)?;
+    Ok((limit, cursor))
 }
 
 fn decode_path(value: &str) -> Result<String, AppError> {
@@ -283,6 +332,7 @@ impl From<RepositoryError> for AppError {
 #[cfg(test)]
 mod tests {
     use std::{
+        cmp::Reverse,
         collections::{HashMap, HashSet},
         sync::Mutex,
     };
@@ -356,6 +406,30 @@ mod tests {
         }
     }
 
+    fn memory_feed_page(mut rays: Vec<Ray>, limit: usize, cursor: Option<FeedCursor>) -> FeedPage {
+        rays.sort_by_key(|ray| Reverse(ray.id));
+        if let Some(cursor) = cursor {
+            rays.retain(|ray| ray.id < cursor.id);
+        }
+        let mut rays: Vec<_> = rays.into_iter().take(limit.saturating_add(1)).collect();
+        let has_more = rays.len() > limit;
+        if has_more {
+            rays.pop();
+        }
+        let next_cursor = if has_more {
+            rays.last().map(|ray| {
+                FeedCursor {
+                    created_at_micros: i64::from(ray.id),
+                    id: ray.id,
+                }
+                .encode()
+            })
+        } else {
+            None
+        };
+        FeedPage { rays, next_cursor }
+    }
+
     #[async_trait]
     impl BeamStore for MemoryStore {
         async fn list_frequencies(&self) -> RepositoryResult<Vec<Frequency>> {
@@ -416,8 +490,13 @@ mod tests {
             Ok(user.clone())
         }
 
-        async fn list_rays_by_frequency(&self, frequency_id: i32) -> RepositoryResult<Vec<Ray>> {
-            let mut rays: Vec<_> = self
+        async fn list_rays_by_frequency(
+            &self,
+            frequency_id: i32,
+            limit: usize,
+            cursor: Option<FeedCursor>,
+        ) -> RepositoryResult<FeedPage> {
+            let rays: Vec<_> = self
                 .inner
                 .lock()
                 .unwrap()
@@ -426,12 +505,16 @@ mod tests {
                 .filter(|ray| ray.frequency_id == frequency_id)
                 .cloned()
                 .collect();
-            rays.reverse();
-            Ok(rays)
+            Ok(memory_feed_page(rays, limit, cursor))
         }
 
-        async fn list_rays_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>> {
-            Ok(self
+        async fn list_rays_by_user(
+            &self,
+            username: &str,
+            limit: usize,
+            cursor: Option<FeedCursor>,
+        ) -> RepositoryResult<FeedPage> {
+            let rays = self
                 .inner
                 .lock()
                 .unwrap()
@@ -439,11 +522,17 @@ mod tests {
                 .iter()
                 .filter(|ray| ray.user_name == username)
                 .cloned()
-                .collect())
+                .collect();
+            Ok(memory_feed_page(rays, limit, cursor))
         }
 
-        async fn list_rays_prismed_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>> {
-            Ok(self
+        async fn list_rays_prismed_by_user(
+            &self,
+            username: &str,
+            limit: usize,
+            cursor: Option<FeedCursor>,
+        ) -> RepositoryResult<FeedPage> {
+            let rays = self
                 .inner
                 .lock()
                 .unwrap()
@@ -451,7 +540,8 @@ mod tests {
                 .iter()
                 .filter(|ray| ray.users_prismed.iter().any(|user| user == username))
                 .cloned()
-                .collect())
+                .collect();
+            Ok(memory_feed_page(rays, limit, cursor))
         }
 
         async fn create_ray(
@@ -559,6 +649,18 @@ mod tests {
                     .body(Body::from(body.to_string()))
                     .unwrap(),
             )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, value)
+    }
+
+    async fn get_json(app: &Router, uri: &str) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
             .unwrap();
         let status = response.status();
@@ -694,19 +796,101 @@ mod tests {
         assert_eq!(created.0, StatusCode::CREATED);
         assert_eq!(created.1["text"], "A new wavelength");
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/frequencies/1/rays")
-                    .body(Body::empty())
-                    .unwrap(),
+        let (status, body) = get_json(&app, "/api/frequencies/1/rays").await;
+        assert_eq!(status, StatusCode::OK);
+        let page: FeedPage = serde_json::from_value(body).unwrap();
+        assert_eq!(page.rays.len(), 2);
+        assert_eq!(page.rays[0].text, "A new wavelength");
+        assert_eq!(page.next_cursor, None);
+    }
+
+    #[tokio::test]
+    async fn frequency_feed_pages_are_bounded_and_do_not_repeat_rays() {
+        let app = test_app();
+        for text in ["Second light", "Third light"] {
+            let (status, _) = json_request(
+                &app,
+                Method::POST,
+                "/api/rays",
+                serde_json::json!({"frequency_id": 1, "user_id": 1, "text": text}),
             )
-            .await
-            .unwrap();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let rays: Vec<Ray> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rays.len(), 2);
-        assert_eq!(rays[0].text, "A new wavelength");
+            .await;
+            assert_eq!(status, StatusCode::CREATED);
+        }
+
+        let (status, first_body) = get_json(&app, "/api/frequencies/1/rays?limit=2").await;
+        assert_eq!(status, StatusCode::OK);
+        let first: FeedPage = serde_json::from_value(first_body).unwrap();
+        assert_eq!(
+            first.rays.iter().map(|ray| ray.id).collect::<Vec<_>>(),
+            vec![3, 2]
+        );
+        let cursor = first
+            .next_cursor
+            .expect("a second page should be available");
+
+        let (status, second_body) = get_json(
+            &app,
+            &format!("/api/frequencies/1/rays?limit=2&cursor={cursor}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let second: FeedPage = serde_json::from_value(second_body).unwrap();
+        assert_eq!(
+            second.rays.iter().map(|ray| ray.id).collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(second.next_cursor, None);
+    }
+
+    #[tokio::test]
+    async fn profile_feeds_return_the_same_paged_contract() {
+        let app = test_app();
+        for text in ["Second light", "Third light"] {
+            let (status, body) = json_request(
+                &app,
+                Method::POST,
+                "/api/rays",
+                serde_json::json!({"frequency_id": 1, "user_id": 1, "text": text}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED);
+            let ray_id = body["id"].as_i64().unwrap();
+            let (status, _) = json_request(
+                &app,
+                Method::POST,
+                "/api/prisms",
+                serde_json::json!({"user_id": 1, "ray_id": ray_id}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        for path in [
+            "/api/users/Anon1/rays?limit=1",
+            "/api/users/Anon1/prisms?limit=1",
+        ] {
+            let (status, body) = get_json(&app, path).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            let page: FeedPage = serde_json::from_value(body).unwrap();
+            assert_eq!(page.rays.len(), 1, "{path}");
+            assert!(page.next_cursor.is_some(), "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn feed_query_rejects_invalid_limits_and_cursors_as_json_errors() {
+        let app = test_app();
+        for uri in [
+            "/api/frequencies/1/rays?limit=0",
+            "/api/frequencies/1/rays?limit=101",
+            "/api/frequencies/1/rays?limit=abc",
+            "/api/frequencies/1/rays?cursor=invalid",
+        ] {
+            let (status, body) = get_json(&app, uri).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+            assert!(body["error"].is_string(), "{uri}");
+        }
     }
 
     #[tokio::test]

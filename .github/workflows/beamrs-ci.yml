@@ -65,9 +65,20 @@ jobs:
               curl --fail --silent http://127.0.0.1:8080/pkg/beamrs.wasm --output /tmp/beamrs.wasm
               test -s /tmp/beamrs.js
               test -s /tmp/beamrs.wasm
+              python3 scripts/pagination-smoke.py http://127.0.0.1:8080
               exit 0
             fi
             sleep 1
           done
           cat /tmp/beamrs.log
           exit 1
+      - name: Smoke test disposable growth benchmark
+        env:
+          RAY_COUNT: 500
+          FEED_PAGE_SIZE: 25
+          CONCURRENCY: 2
+          REQUESTS: 20
+          REPORT_PATH: target/growth-smoke.md
+        run: |
+          ./scripts/growth-benchmark.sh
+          test -s "$REPORT_PATH"

@@ -14,6 +14,7 @@ use std::{process::ExitCode, sync::Arc, time::Duration};
 use anyhow::Result;
 use beamrs::{
     config::Settings,
+    domain::{DEFAULT_FEED_PAGE_SIZE, MAX_FEED_PAGE_SIZE},
     loadtest::{
         run_load_test_with, serve_loopback, HttpTarget, LoadProfile, RequestSpec, Transport,
         DEFAULT_HTTP_TIMEOUT,
@@ -37,6 +38,7 @@ Options:
   --requests N        total requests to send          (default: 200)
   --frequency-id N    frequency used by read requests (default: 1)
   --username NAME     user used by profile requests   (default: Anon1)
+  --feed-page-size N  page size for feed requests     (default: 25, max: 100)
   --json              print the report as JSON
   -h, --help          print this message
 
@@ -92,6 +94,7 @@ struct Options {
     requests: usize,
     frequency_id: i32,
     username: String,
+    feed_page_size: usize,
     json: bool,
 }
 
@@ -106,6 +109,7 @@ impl Default for Options {
             requests: 200,
             frequency_id: 1,
             username: "Anon1".to_string(),
+            feed_page_size: DEFAULT_FEED_PAGE_SIZE,
             json: false,
         }
     }
@@ -173,8 +177,18 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
                 options.username = value_at(index)?;
                 index += 2;
             }
+            "--feed-page-size" => {
+                options.feed_page_size = parse_number("--feed-page-size", &value_at(index)?)?;
+                index += 2;
+            }
             other => return Err(format!("unknown option '{other}'")),
         }
+    }
+
+    if !(1..=MAX_FEED_PAGE_SIZE).contains(&options.feed_page_size) {
+        return Err(format!(
+            "--feed-page-size must be between 1 and {MAX_FEED_PAGE_SIZE}"
+        ));
     }
 
     options.transport = match (explicit_transport, &options.target) {
@@ -200,10 +214,16 @@ fn parse_number<T: std::str::FromStr>(flag: &str, value: &str) -> Result<T, Stri
 }
 
 fn build_profile(options: &Options) -> LoadProfile {
-    let frequency_rays = format!("/api/frequencies/{}/rays", options.frequency_id);
+    let frequency_rays = format!(
+        "/api/frequencies/{}/rays?limit={}",
+        options.frequency_id, options.feed_page_size
+    );
     let encoded = urlencoding::encode(&options.username).into_owned();
-    let user_rays = format!("/api/users/{encoded}/rays");
-    let user_prisms = format!("/api/users/{encoded}/prisms");
+    let user_rays = format!("/api/users/{encoded}/rays?limit={}", options.feed_page_size);
+    let user_prisms = format!(
+        "/api/users/{encoded}/prisms?limit={}",
+        options.feed_page_size
+    );
     let user_body = format!(
         "{{\"username\":{}}}",
         serde_json::to_string(&options.username).unwrap_or_else(|_| "\"Anon1\"".to_string())
@@ -355,6 +375,8 @@ mod tests {
             "40",
             "--frequency-id",
             "7",
+            "--feed-page-size",
+            "75",
             "--username",
             "Anon42",
             "--http-timeout",
@@ -366,6 +388,7 @@ mod tests {
         assert_eq!(parsed.concurrency, 4);
         assert_eq!(parsed.requests, 40);
         assert_eq!(parsed.frequency_id, 7);
+        assert_eq!(parsed.feed_page_size, 75);
         assert_eq!(parsed.username, "Anon42");
         assert_eq!(parsed.http_timeout_seconds, 45);
         assert!(parsed.json);
@@ -409,6 +432,16 @@ mod tests {
     fn non_numeric_value_is_rejected() {
         let error = parse_args(&args(&["--concurrency", "many"])).unwrap_err();
         assert!(error.contains("expects a number"));
+    }
+
+    #[test]
+    fn feed_page_size_is_bounded() {
+        assert_eq!(options(&["--feed-page-size", "1"]).feed_page_size, 1);
+        assert_eq!(options(&["--feed-page-size", "100"]).feed_page_size, 100);
+        for value in ["0", "101"] {
+            let error = parse_args(&args(&["--feed-page-size", value])).unwrap_err();
+            assert!(error.contains("must be between 1 and 100"));
+        }
     }
 
     #[test]
@@ -470,8 +503,21 @@ mod tests {
         assert!(profile
             .requests
             .iter()
-            .any(|spec| spec.path == "/api/users/Anon%2042/rays"));
+            .any(|spec| spec.path == "/api/users/Anon%2042/rays?limit=25"));
         assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn feed_profiles_request_the_configured_page_size() {
+        let profile = build_profile(&options(&["--feed-page-size", "100"]));
+
+        for path in [
+            "/api/frequencies/1/rays?limit=100",
+            "/api/users/Anon1/rays?limit=100",
+            "/api/users/Anon1/prisms?limit=100",
+        ] {
+            assert!(profile.requests.iter().any(|request| request.path == path));
+        }
     }
 
     #[test]

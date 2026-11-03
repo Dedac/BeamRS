@@ -3,8 +3,8 @@ use sqlx::{PgPool, Row};
 use thiserror::Error;
 
 use crate::domain::{
-    validate_frequency_name, validate_ray_text, validate_username, Frequency, PrismResult, Ray,
-    User,
+    validate_frequency_name, validate_ray_text, validate_username, FeedCursor, FeedPage, Frequency,
+    PrismResult, Ray, User, MAX_FEED_PAGE_SIZE,
 };
 
 #[derive(Debug, Error)]
@@ -27,9 +27,24 @@ pub trait BeamStore: Send + Sync {
     async fn create_frequency(&self, name: &str) -> RepositoryResult<Frequency>;
     async fn get_or_create_user(&self, username: &str) -> RepositoryResult<User>;
     async fn update_user_name(&self, user_id: i32, username: &str) -> RepositoryResult<User>;
-    async fn list_rays_by_frequency(&self, frequency_id: i32) -> RepositoryResult<Vec<Ray>>;
-    async fn list_rays_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>>;
-    async fn list_rays_prismed_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>>;
+    async fn list_rays_by_frequency(
+        &self,
+        frequency_id: i32,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage>;
+    async fn list_rays_by_user(
+        &self,
+        username: &str,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage>;
+    async fn list_rays_prismed_by_user(
+        &self,
+        username: &str,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage>;
     async fn create_ray(
         &self,
         frequency_id: i32,
@@ -91,38 +106,105 @@ impl BeamRepository {
         predicate: &str,
         bind_text: Option<&str>,
         bind_id: Option<i32>,
-    ) -> RepositoryResult<Vec<Ray>> {
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage> {
+        if !(1..=MAX_FEED_PAGE_SIZE).contains(&limit) {
+            return Err(RepositoryError::Validation(format!(
+                "feed limit must be between 1 and {MAX_FEED_PAGE_SIZE}"
+            )));
+        }
+        // Select the keyset page before enriching it so query cost tracks the
+        // page size rather than the size of the whole feed. Author and prism
+        // lookups are correlated per page row so generic plans cannot fall back
+        // to hashing whole users/prisms tables. The cursor clause is omitted
+        // entirely on the first page so later pages can use it as an index
+        // condition.
+        let cursor_clause = if cursor.is_some() {
+            r#"AND (r.created_at, r.id) <
+                   (
+                       TIMESTAMPTZ 'epoch'
+                           + ($3::DOUBLE PRECISION * INTERVAL '1 microsecond'),
+                       $4::INTEGER
+                   )"#
+        } else {
+            ""
+        };
         let sql = format!(
             r#"
-            SELECT r.id, r.text, r.frequency_id, r.user_id,
-                   COALESCE(u.username, '') AS user_name,
-                   COUNT(p.id)::INT AS prism_count,
+            WITH page AS (
+                SELECT r.id, r.text, r.frequency_id, r.user_id, r.created_at
+                FROM rays r
+                WHERE {predicate}
+                  {cursor_clause}
+                ORDER BY r.created_at DESC, r.id DESC
+                LIMIT $2
+            )
+            SELECT page.id, page.text, page.frequency_id, page.user_id,
                    COALESCE(
-                       ARRAY_AGG(pu.username ORDER BY pu.username)
-                           FILTER (WHERE pu.username IS NOT NULL),
-                       ARRAY[]::TEXT[]
-                   ) AS users_prismed
-            FROM rays r
-            LEFT JOIN users u ON u.id = r.user_id
-            LEFT JOIN prisms p ON p.ray_id = r.id
-            LEFT JOIN users pu ON pu.id = p.user_id
-            WHERE {predicate}
-            GROUP BY r.id, u.username
-            ORDER BY r.created_at DESC, r.id DESC
+                       (SELECT author.username FROM users author
+                        WHERE author.id = page.user_id),
+                       ''
+                   ) AS user_name,
+                   prism_stats.prism_count,
+                   FLOOR(EXTRACT(EPOCH FROM page.created_at) * 1000000)::BIGINT
+                       AS cursor_created_at_micros,
+                   prism_stats.users_prismed
+            FROM page
+            CROSS JOIN LATERAL (
+                SELECT COUNT(*)::INT AS prism_count,
+                       COALESCE(
+                           ARRAY_AGG(pu.username ORDER BY pu.username)
+                               FILTER (WHERE pu.username IS NOT NULL),
+                           ARRAY[]::TEXT[]
+                       ) AS users_prismed
+                FROM prisms p
+                LEFT JOIN users pu ON pu.id = p.user_id
+                WHERE p.ray_id = page.id
+            ) prism_stats
+            ORDER BY page.created_at DESC, page.id DESC
             "#
         );
+        let limit_with_lookahead = (limit + 1) as i64;
 
-        let rows = match (bind_text, bind_id) {
-            (Some(value), None) => sqlx::query(&sql).bind(value).fetch_all(&self.pool).await?,
-            (None, Some(value)) => sqlx::query(&sql).bind(value).fetch_all(&self.pool).await?,
+        let query = match (bind_text, bind_id) {
+            (Some(value), None) => sqlx::query(&sql).bind(value),
+            (None, Some(value)) => sqlx::query(&sql).bind(value),
             _ => {
                 return Err(RepositoryError::Database(sqlx::Error::Protocol(
                     "invalid ray query binding".into(),
                 )))
             }
         };
+        let mut query = query.bind(limit_with_lookahead);
+        if let Some(cursor) = cursor {
+            query = query.bind(cursor.created_at_micros).bind(cursor.id);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
 
-        rows.into_iter().map(row_to_ray).collect()
+        let has_more = rows.len() > limit;
+        let mut rows = rows;
+        if has_more {
+            rows.pop();
+        }
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|row| -> Result<String, RepositoryError> {
+                    Ok(FeedCursor {
+                        created_at_micros: row.try_get("cursor_created_at_micros")?,
+                        id: row.try_get("id")?,
+                    }
+                    .encode())
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let rays = rows
+            .into_iter()
+            .map(row_to_ray)
+            .collect::<RepositoryResult<_>>()?;
+        Ok(FeedPage { rays, next_cursor })
     }
 }
 
@@ -213,18 +295,45 @@ impl BeamStore for BeamRepository {
         })
     }
 
-    async fn list_rays_by_frequency(&self, frequency_id: i32) -> RepositoryResult<Vec<Ray>> {
-        self.list_rays_where("r.frequency_id = $1", None, Some(frequency_id))
-            .await
+    async fn list_rays_by_frequency(
+        &self,
+        frequency_id: i32,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage> {
+        self.list_rays_where(
+            "r.frequency_id = $1",
+            None,
+            Some(frequency_id),
+            limit,
+            cursor,
+        )
+        .await
     }
 
-    async fn list_rays_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>> {
+    async fn list_rays_by_user(
+        &self,
+        username: &str,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage> {
         let username = validate_username(username).map_err(RepositoryError::Validation)?;
-        self.list_rays_where("u.username = $1", Some(&username), None)
-            .await
+        self.list_rays_where(
+            "r.user_id = (SELECT id FROM users WHERE username = $1)",
+            Some(&username),
+            None,
+            limit,
+            cursor,
+        )
+        .await
     }
 
-    async fn list_rays_prismed_by_user(&self, username: &str) -> RepositoryResult<Vec<Ray>> {
+    async fn list_rays_prismed_by_user(
+        &self,
+        username: &str,
+        limit: usize,
+        cursor: Option<FeedCursor>,
+    ) -> RepositoryResult<FeedPage> {
         let username = validate_username(username).map_err(RepositoryError::Validation)?;
         self.list_rays_where(
             "EXISTS (
@@ -235,6 +344,8 @@ impl BeamStore for BeamRepository {
             )",
             Some(&username),
             None,
+            limit,
+            cursor,
         )
         .await
     }

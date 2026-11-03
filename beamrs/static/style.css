@@ -85,6 +85,9 @@ input:focus, textarea:focus { border-color: var(--red); box-shadow: 0 0 0 3px rg
 .feed-section { margin-top: 2.5rem; }
 .section-title h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: .12em; margin: 0 0 1rem; }
 .section-title > span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.feed-pagination { display: flex; justify-content: center; margin-top: 1.2rem; }
+.secondary-button { display: inline-flex; justify-content: center; align-items: center; border: 1px solid var(--border); border-radius: .45rem; color: var(--text); background: var(--surface-2); padding: .7rem 1rem; font-weight: 700; cursor: pointer; }
+.secondary-button:hover, .secondary-button:focus-visible { border-color: var(--cyan); color: var(--cyan); }
 .ray-list { display: grid; gap: .8rem; }
 .ray-card { display: grid; grid-template-columns: 3px 1fr; border: 1px solid var(--border); border-radius: .65rem; overflow: hidden; background: rgba(17, 22, 32, .88); transition: border-color .2s, transform .2s; }
 .ray-card:hover { border-color: #3b465b; transform: translateY(-1px); }

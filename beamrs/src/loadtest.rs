@@ -176,6 +176,7 @@ struct Outcome {
     status: Option<u16>,
     body_read_error: bool,
     transport_error: bool,
+    response_bytes: u64,
 }
 
 impl Sender {
@@ -207,17 +208,19 @@ impl Sender {
             Some(response) => {
                 let status = response.status().as_u16();
                 // Drain the body so the measurement covers the full response.
-                let body_read_error = to_bytes(response.into_body(), usize::MAX).await.is_err();
+                let body = to_bytes(response.into_body(), usize::MAX).await;
                 Outcome {
                     status: Some(status),
-                    body_read_error,
+                    body_read_error: body.is_err(),
                     transport_error: false,
+                    response_bytes: body.map_or(0, |bytes| bytes.len() as u64),
                 }
             }
             None => Outcome {
                 status: None,
                 body_read_error: false,
                 transport_error: true,
+                response_bytes: 0,
             },
         }
     }
@@ -336,6 +339,7 @@ struct Sample {
     status: Option<u16>,
     body_read_error: bool,
     transport_error: bool,
+    response_bytes: u64,
     latency: Duration,
 }
 
@@ -361,6 +365,9 @@ pub struct LatencyStats {
     pub p95_ms: f64,
     pub p99_ms: f64,
     pub max_ms: f64,
+    pub total_response_bytes: u64,
+    pub mean_response_bytes: f64,
+    pub max_response_bytes: u64,
 }
 
 impl LatencyStats {
@@ -374,6 +381,9 @@ impl LatencyStats {
             .collect();
         millis.sort_by(|left, right| left.total_cmp(right));
         let total: f64 = millis.iter().sum();
+        let total_response_bytes = samples.iter().fold(0_u64, |total, sample| {
+            total.saturating_add(sample.response_bytes)
+        });
         Self {
             count: samples.len(),
             failures: samples.iter().filter(|sample| sample.failed()).count(),
@@ -382,6 +392,13 @@ impl LatencyStats {
             p95_ms: percentile(&millis, 95.0),
             p99_ms: percentile(&millis, 99.0),
             max_ms: millis[millis.len() - 1],
+            total_response_bytes,
+            mean_response_bytes: total_response_bytes as f64 / samples.len() as f64,
+            max_response_bytes: samples
+                .iter()
+                .map(|sample| sample.response_bytes)
+                .max()
+                .unwrap_or_default(),
         }
     }
 }
@@ -485,8 +502,17 @@ impl LoadReport {
         out.push('\n');
 
         out.push_str(&format!(
-            "\n{:<28}{:>8}{:>9}{:>10}{:>10}{:>10}{:>10}{:>10}\n",
-            "endpoint", "count", "failed", "mean ms", "p50 ms", "p95 ms", "p99 ms", "max ms"
+            "\n{:<28}{:>8}{:>9}{:>10}{:>10}{:>10}{:>10}{:>10}{:>12}{:>12}\n",
+            "endpoint",
+            "count",
+            "failed",
+            "mean ms",
+            "p50 ms",
+            "p95 ms",
+            "p99 ms",
+            "max ms",
+            "mean bytes",
+            "max bytes"
         ));
         let mut rows: Vec<(&str, &LatencyStats)> = vec![("(all)", &self.overall)];
         rows.extend(
@@ -496,7 +522,7 @@ impl LoadReport {
         );
         for (name, stats) in rows {
             out.push_str(&format!(
-                "{:<28}{:>8}{:>9}{:>10.2}{:>10.2}{:>10.2}{:>10.2}{:>10.2}\n",
+                "{:<28}{:>8}{:>9}{:>10.2}{:>10.2}{:>10.2}{:>10.2}{:>10.2}{:>12.1}{:>12}\n",
                 name,
                 stats.count,
                 stats.failures,
@@ -505,6 +531,8 @@ impl LoadReport {
                 stats.p95_ms,
                 stats.p99_ms,
                 stats.max_ms,
+                stats.mean_response_bytes,
+                stats.max_response_bytes,
             ));
         }
         out
@@ -569,6 +597,7 @@ pub async fn run_load_test_with(
                             status: None,
                             body_read_error: false,
                             transport_error: false,
+                            response_bytes: 0,
                             latency: Duration::ZERO,
                         });
                         continue;
@@ -583,6 +612,7 @@ pub async fn run_load_test_with(
                                 status: None,
                                 body_read_error: false,
                                 transport_error: true,
+                                response_bytes: 0,
                             },
                         }
                     }
@@ -593,6 +623,7 @@ pub async fn run_load_test_with(
                     status: outcome.status,
                     body_read_error: outcome.body_read_error,
                     transport_error: outcome.transport_error,
+                    response_bytes: outcome.response_bytes,
                     latency: call_started.elapsed(),
                 });
             }
@@ -763,6 +794,8 @@ mod tests {
 
         assert_eq!(report.failures, 0);
         assert_eq!(report.status_counts.get("200"), Some(&2));
+        assert!(report.endpoints["echo"].total_response_bytes > 0);
+        assert!(report.endpoints["echo"].max_response_bytes > 0);
     }
 
     #[tokio::test]
@@ -947,6 +980,7 @@ mod tests {
         assert!(text.contains("throughput"));
         assert!(text.contains("(all)"));
         assert!(text.contains("ok"));
+        assert!(text.contains("mean bytes"));
     }
 
     #[tokio::test]
