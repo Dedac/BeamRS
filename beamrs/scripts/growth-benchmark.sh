@@ -53,7 +53,7 @@ compose() {
 cleanup() {
     result=$?
     trap - EXIT
-    if ! compose down --remove-orphans; then
+    if ! compose down --volumes --remove-orphans; then
         printf '%s\n' "failed to remove disposable growth-test containers" >&2
         if [ "$result" -eq 0 ]; then
             result=1

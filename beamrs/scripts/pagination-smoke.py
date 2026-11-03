@@ -96,7 +96,7 @@ def main():
         )
     print("Feed rays carry author and prism details")
 
-    for bad in ("limit=0", "limit=101", "cursor=garbage"):
+    for bad in ("limit=0", "limit=101", "cursor=garbage", "cursor=9223372036854775807:1"):
         try:
             request(f"/api/frequencies/{frequency_id}/rays?{bad}")
         except Exception as error:

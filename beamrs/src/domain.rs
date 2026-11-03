@@ -35,14 +35,22 @@ pub struct FeedCursor {
     pub id: i32,
 }
 
+// The repository converts cursor timestamps through DOUBLE PRECISION, which is
+// exact up to 2^53 microseconds (about years 1685–2255) and keeps PostgreSQL's
+// interval and timestamp arithmetic in range.
+const MAX_CURSOR_MICROS: u64 = 1 << 53;
+
 impl FeedCursor {
     pub fn parse(value: &str) -> Result<Self, String> {
         let (created_at_micros, id) = value
             .split_once(':')
             .ok_or_else(|| "cursor must contain a timestamp and ray id".to_string())?;
-        let created_at_micros = created_at_micros
+        let created_at_micros: i64 = created_at_micros
             .parse()
             .map_err(|_| "cursor timestamp is invalid".to_string())?;
+        if created_at_micros.unsigned_abs() > MAX_CURSOR_MICROS {
+            return Err("cursor timestamp is out of range".to_string());
+        }
         let id = id
             .parse()
             .map_err(|_| "cursor ray id is invalid".to_string())?;
@@ -210,5 +218,16 @@ mod tests {
         assert!(FeedCursor::parse("not-a-cursor").is_err());
         assert!(FeedCursor::parse("123:0").is_err());
         assert!(FeedCursor::parse("123:42:extra").is_err());
+    }
+
+    #[test]
+    fn feed_cursors_reject_timestamps_postgres_cannot_convert_exactly() {
+        let limit = 1_i64 << 53;
+        assert!(FeedCursor::parse(&format!("{limit}:1")).is_ok());
+        assert!(FeedCursor::parse(&format!("{}:1", -limit)).is_ok());
+        assert!(FeedCursor::parse(&format!("{}:1", limit + 1)).is_err());
+        assert!(FeedCursor::parse(&format!("{}:1", -limit - 1)).is_err());
+        assert!(FeedCursor::parse(&format!("{}:1", i64::MAX)).is_err());
+        assert!(FeedCursor::parse(&format!("{}:1", i64::MIN)).is_err());
     }
 }
